@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Team Task Manager</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-secondary-bg-color, #efeff4);
+    --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #ffffff));
+    --text: var(--tg-theme-text-color, #000000);
+    --hint: var(--tg-theme-hint-color, #8e8e93);
+    --sub: var(--tg-theme-subtitle-text-color, var(--tg-theme-hint-color, #8e8e93));
+    --link: var(--tg-theme-link-color, #2481cc);
+    --accent: var(--tg-theme-accent-text-color, var(--tg-theme-link-color, #2481cc));
+    --btn: var(--tg-theme-button-color, #2481cc);
+    --btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --danger: var(--tg-theme-destructive-text-color, #e53935);
+    --header: var(--tg-theme-section-header-text-color, #6d6d72);
+    --sep: rgba(128, 128, 128, .22);
+    --ok: #31b545;
+    --warn: #f09a37;
+    --soft: rgba(128, 128, 128, .12);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); overscroll-behavior-y: none; }
+  body.no-tabs { padding-bottom: 24px; }
+  button { font: inherit; color: inherit; }
+  .center { min-height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 12px; }
+  .spinner { width: 28px; height: 28px; border: 3px solid var(--soft); border-top-color: var(--btn); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .big-emoji { font-size: 52px; }
+  .hint { color: var(--hint); font-size: 14px; }
+  .small { font-size: 13px; }
+
+  .page-head { padding: 18px 16px 6px; display: flex; align-items: flex-end; gap: 8px; }
+  .page-head h1 { font-size: 26px; margin: 0; flex: 1; letter-spacing: -.02em; }
+  .fallback-back { background: none; border: 0; color: var(--link); padding: 12px 16px 0; font-size: 16px; cursor: pointer; }
+
+  .hero { background: var(--card); margin: 8px 12px 4px; border-radius: 14px; padding: 16px; }
+  .hero-top { display: flex; align-items: center; gap: 12px; }
+  .hero-num { font-size: 34px; font-weight: 700; letter-spacing: -.02em; }
+  .hero-num span { font-size: 20px; color: var(--hint); font-weight: 600; }
+  .bar { height: 8px; background: var(--soft); border-radius: 99px; overflow: hidden; margin-top: 12px; }
+  .bar > div { height: 100%; background: var(--ok); border-radius: 99px; transition: width .35s ease; }
+
+  .section-title { font-size: 13px; text-transform: uppercase; letter-spacing: .02em; color: var(--header); padding: 18px 28px 7px; display: flex; gap: 6px; align-items: center; }
+  .section-title .count { margin-left: auto; text-transform: none; }
+  .section { background: var(--card); border-radius: 12px; margin: 0 12px; overflow: hidden; }
+  .section-foot { color: var(--hint); font-size: 13px; padding: 7px 28px 0; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; position: relative; min-height: 48px; }
+  .row + .row::before { content: ''; position: absolute; top: 0; left: 14px; right: 0; height: 1px; background: var(--sep); }
+  .row.indent + .row.indent::before { left: 52px; }
+  .row.tap { cursor: pointer; }
+  .row.tap:active { background: var(--soft); }
+  .row .body { flex: 1; min-width: 0; }
+  .row .title { font-size: 16px; }
+  .row .meta { font-size: 13px; color: var(--sub); margin-top: 2px; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  .row .value { color: var(--hint); font-size: 15px; text-align: right; }
+  .chev { color: var(--hint); opacity: .6; font-size: 20px; line-height: 1; }
+  .item-done .title { color: var(--hint); text-decoration: line-through; }
+
+  .check { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--hint); flex: none; display: flex; align-items: center; justify-content: center; background: none; padding: 0; cursor: pointer; opacity: .8; }
+  .check svg { width: 14px; height: 14px; opacity: 0; }
+  .check.done { background: var(--ok); border-color: var(--ok); opacity: 1; }
+  .check.done svg { opacity: 1; }
+  .check.na { background: var(--hint); border-color: var(--hint); opacity: .7; }
+  .check.na::after { content: ''; width: 10px; height: 2px; background: #fff; border-radius: 2px; }
+  .check.done-late { background: var(--warn); border-color: var(--warn); opacity: 1; }
+  .check.done-late svg { opacity: 1; }
+  .check.late { border-color: var(--danger); opacity: 1; }
+  .check.missed { background: var(--danger); border-color: var(--danger); opacity: .85; }
+  .check.missed::after { content: '✕'; color: #fff; font-size: 12px; font-weight: 700; }
+  .row.is-late { background: rgba(229, 57, 53, .06); }
+  .mini-stats { display: flex; gap: 8px; margin-top: 12px; }
+  .mini-stats div { flex: 1; background: var(--soft); border-radius: 10px; padding: 8px 10px; font-size: 13px; color: var(--sub); }
+  .mini-stats b { display: block; font-size: 16px; color: var(--text); }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 8px 28px 0; font-size: 12px; color: var(--hint); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: 0; }
+  .check.square { border-radius: 7px; }
+
+  .tag { font-size: 12px; font-weight: 600; padding: 1px 7px; border-radius: 6px; background: var(--soft); color: var(--sub); }
+  .tag.red { background: rgba(229, 57, 53, .14); color: var(--danger); }
+  .tag.green { background: rgba(49, 181, 69, .15); color: var(--ok); }
+  .tag.orange { background: rgba(240, 154, 55, .16); color: var(--warn); }
+  .tag.blue { background: rgba(36, 129, 204, .14); color: var(--accent); }
+
+  .btn { display: block; width: calc(100% - 24px); margin: 12px; padding: 13px; border: 0; border-radius: 12px; background: var(--btn); color: var(--btn-text); font-size: 16px; font-weight: 600; cursor: pointer; text-align: center; }
+  .btn:active { opacity: .85; }
+  .btn.secondary { background: var(--card); color: var(--link); }
+  .btn.danger { background: var(--card); color: var(--danger); }
+  .btn:disabled { opacity: .5; }
+  .btn-row { display: flex; gap: 10px; margin: 12px; }
+  .btn-row .btn { margin: 0; width: auto; flex: 1; }
+  .mini-btn { border: 0; border-radius: 8px; padding: 7px 12px; font-size: 14px; font-weight: 600; cursor: pointer; background: var(--btn); color: var(--btn-text); }
+  .mini-btn.ghost { background: var(--soft); color: var(--danger); }
+  .link-btn { background: none; border: 0; color: var(--link); font-size: 15px; cursor: pointer; padding: 0; }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 12px 0; }
+  .stat { background: var(--card); border-radius: 12px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 22px; }
+  .stat span { font-size: 12px; color: var(--hint); }
+
+  .seg { display: flex; background: var(--soft); border-radius: 9px; padding: 2px; margin: 10px 12px 0; }
+  .seg button { flex: 1; border: 0; background: none; padding: 7px 4px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer; }
+  .seg button.on { background: var(--card); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding: 12px 12px 0; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { border: 0; background: var(--card); color: var(--text); border-radius: 99px; padding: 6px 12px; font-size: 14px; white-space: nowrap; cursor: pointer; }
+  .chip.on { background: var(--btn); color: var(--btn-text); }
+
+  .field { padding: 8px 14px 10px; position: relative; }
+  .field + .field::before, .row + .field::before, .field + .row::before { content: ''; position: absolute; top: 0; left: 14px; right: 0; height: 1px; background: var(--sep); }
+  .field label { display: block; font-size: 13px; color: var(--hint); margin-bottom: 3px; }
+  .field input, .field select, .field textarea { width: 100%; border: 0; background: none; color: var(--text); font: inherit; padding: 2px 0; outline: none; }
+  .field textarea { resize: vertical; min-height: 64px; }
+  .field select { -webkit-appearance: none; appearance: none; }
+  input[type="date"], input[type="time"] { min-height: 24px; }
+  .daypick { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 4px; }
+  .daypick button { border: 0; width: 40px; height: 34px; border-radius: 8px; background: var(--soft); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; }
+  .daypick button.on { background: var(--btn); color: var(--btn-text); }
+  .switch { position: relative; width: 50px; height: 30px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; background: var(--soft); border-radius: 99px; transition: .2s; cursor: pointer; }
+  .switch span::before { content: ''; position: absolute; width: 26px; height: 26px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: .2s; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); }
+  .switch input:checked + span { background: var(--ok); }
+  .switch input:checked + span::before { transform: translateX(20px); }
+  .hide { display: none !important; }
+
+  .detail-title { font-size: 22px; font-weight: 700; padding: 16px 16px 4px; letter-spacing: -.01em; }
+  .detail-tags { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 16px 0; }
+  .detail-desc { padding: 10px 16px 0; color: var(--sub); white-space: pre-wrap; font-size: 15px; }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--btn); color: var(--btn-text); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex: none; }
+  .ring { width: 38px; height: 38px; flex: none; }
+  .empty { padding: 28px 16px; text-align: center; color: var(--hint); }
+
+  .tabs { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: var(--card); border-top: 1px solid var(--sep); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); z-index: 10; }
+  .tabs button { flex: 1; border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; color: var(--hint); padding: 4px 0; cursor: pointer; }
+  .tabs button svg { width: 25px; height: 25px; }
+  .tabs button.on { color: var(--btn); }
+  .tabs.hidden { display: none; }
+  .toast { position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px); background: rgba(30, 30, 30, .92); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; pointer-events: none; transition: .25s; max-width: calc(100% - 32px); z-index: 20; text-align: center; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.error { background: var(--danger); }
+</style>
+</head>
+<body>
+<div id="app"><div class="center"><div class="spinner"></div></div></div>
+<nav id="tabs" class="tabs hidden"></nav>
+<div id="toast" class="toast"></div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+const API_URL = new URLSearchParams(location.search).get('api') || '';
+const CATS = ['Daily', 'Weekly', 'Monthly', 'One-time'];
+const SHIFTS = ['Morning', 'Evening', 'General'];
+const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const ICONS = {
+  today: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>',
+  upcoming: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
+  team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20v-5M10 20V9M16 20v-8M22 20H2"/></svg>',
+  manage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
+};
+const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+
+const S = { boot: null, tab: 'today', stack: [], items: [], today: '', manageTab: 'tasks', taskFilter: 'All', dashDay: '', open: {} };
+const $ = sel => document.querySelector(sel);
+const app = $('#app');
+const hasNativeBack = !!(tg && tg.BackButton && tg.isVersionAtLeast && tg.isVersionAtLeast('6.1'));
+
+// ───────── Helpers ─────────
+async function api(action, args) {
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action, args: args || {}, initData: tg ? tg.initData : '' }),
+  });
+  let j;
+  try { j = await res.json(); } catch (e) { throw new Error('Server error. Please try again.'); }
+  if (!j.ok) throw new Error(j.error || 'Something went wrong.');
+  return j.data;
+}
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function toast(msg, isError) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => { t.className = 'toast'; }, isError ? 4000 : 2000);
+}
+function fail(e) { haptic('error'); toast((e && e.message) || String(e), true); }
+function haptic(type) { try { tg.HapticFeedback.notificationOccurred(type); } catch (e) { /* not in Telegram */ } }
+function tap() { try { tg.HapticFeedback.selectionChanged(); } catch (e) { /* not in Telegram */ } }
+function confirmBox(msg) {
+  return new Promise(resolve => {
+    if (tg && tg.showConfirm && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')) tg.showConfirm(msg, resolve);
+    else resolve(window.confirm(msg));
+  });
+}
+function pd(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
+function fmtFull(s) { const d = pd(s); return WEEK[d.getDay()] + ', ' + d.getDate() + ' ' + MONTHS[d.getMonth()]; }
+function fmtShort(s) { const d = pd(s); return d.getDate() + ' ' + MONTHS[d.getMonth()]; }
+function fmt12(hm) { if (!hm) return ''; const [h, m] = hm.split(':').map(Number); return (h % 12 || 12) + ':' + String(m).padStart(2, '0') + ' ' + (h < 12 ? 'AM' : 'PM'); }
+function timeOf(dt) { return dt && dt.length > 10 ? fmt12(dt.slice(11, 16)) : ''; }
+function initials(n) { return String(n).split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'; }
+function loading() { app.innerHTML = '<div class="center"><div class="spinner"></div></div>'; }
+function isAdmin() { return S.boot && S.boot.user.role === 'Admin'; }
+function ring(done, total) {
+  const pct = total ? done / total : 0, r = 16, c = 2 * Math.PI * r;
+  const arc = pct ? `<circle cx="19" cy="19" r="${r}" fill="none" stroke="var(--ok)" stroke-width="4" stroke-linecap="round" stroke-dasharray="${c * pct} ${c}" transform="rotate(-90 19 19)"/>` : '';
+  return `<svg class="ring" viewBox="0 0 38 38"><circle cx="19" cy="19" r="${r}" fill="none" stroke="var(--soft)" stroke-width="4"/>${arc}</svg>`;
+}
+
+// ───────── Navigation ─────────
+function setTabsVisible(on) {
+  $('#tabs').classList.toggle('hidden', !on);
+  document.body.classList.toggle('no-tabs', !on);
+}
+function renderTabs() {
+  const tabs = [['today', 'Today'], ['upcoming', 'Upcoming']];
+  if (isAdmin()) tabs.push(['team', 'Team'], ['manage', 'Manage']);
+  $('#tabs').innerHTML = tabs.map(([k, l]) => `<button data-tab="${k}" class="${S.tab === k ? 'on' : ''}">${ICONS[k]}${l}</button>`).join('');
+  $('#tabs').querySelectorAll('button').forEach(b => b.onclick = () => { if (S.tab !== b.dataset.tab) tap(); S.tab = b.dataset.tab; S.stack = []; syncBack(); openTab(); });
+}
+function syncBack() {
+  setTabsVisible(!S.stack.length);
+  if (hasNativeBack) S.stack.length ? tg.BackButton.show() : tg.BackButton.hide();
+}
+function push(view) { S.stack.push(view); syncBack(); window.scrollTo(0, 0); view(); }
+function pop() {
+  S.stack.pop();
+  syncBack();
+  const top = S.stack[S.stack.length - 1];
+  if (top) top(); else renderCurrentTab();
+}
+function backLink() { return hasNativeBack ? '' : '<button class="fallback-back" data-act="back">‹ Back</button>'; }
+function openTab() {
+  syncBack();
+  renderTabs();
+  window.scrollTo(0, 0);
+  ({ today: loadToday, upcoming: loadUpcoming, team: loadDashboard, manage: loadManage })[S.tab]();
+}
+function renderCurrentTab() {
+  renderTabs();
+  ({ today: renderToday, upcoming: loadUpcoming, team: loadDashboard, manage: renderManage })[S.tab]();
+}
+
+// ───────── Boot ─────────
+let tgReady = false;
+async function boot() {
+  if (tg && !tgReady) {
+    tgReady = true;
+    tg.ready();
+    tg.expand();
+    try { tg.setHeaderColor('secondary_bg_color'); tg.setBackgroundColor('secondary_bg_color'); } catch (e) { /* older client */ }
+    try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) { /* older client */ }
+    if (hasNativeBack) tg.BackButton.onClick(pop);
+  }
+  if (!tg || !tg.initData) return screen('📱', 'Open in Telegram', 'Please open this app from the Team Task Manager bot in Telegram.');
+  if (!API_URL) return screen('⚠️', 'App link incomplete', 'Please open the app using the "Open Tasks" button in the bot.');
+  try {
+    const b = await api('bootstrap');
+    handleBoot(b);
+  } catch (e) {
+    screen('⚠️', 'Could not connect', esc(e.message), '<button class="btn" style="max-width:260px" onclick="loading();boot()">Try again</button>');
+  }
+}
+function handleBoot(b) {
+  S.boot = b;
+  if (b.state === 'claim') return renderClaim();
+  if (b.state === 'pending') return screen('⏳', 'Waiting for approval', 'Your request has been sent to the admin. You will get a message in the bot once you are approved.');
+  if (b.state === 'rejected') return screen('🚫', 'Access declined', 'Your request was declined. Please contact your admin.');
+  S.today = b.today;
+  S.cfg = b.settings;
+  S.tab = b.user.getsTasks || !isAdmin() ? 'today' : 'team';
+  openTab();
+}
+function screen(icon, title, text, extra) {
+  setTabsVisible(false);
+  app.innerHTML = `<div class="center"><div class="big-emoji">${icon}</div><h2 style="margin:0">${title}</h2><div class="hint" style="max-width:320px">${text}</div>${extra || ''}</div>`;
+}
+function renderClaim() {
+  setTabsVisible(false);
+  app.innerHTML = `<div class="center" style="min-height:40vh"><div class="big-emoji">🔑</div><h2 style="margin:0">Admin setup</h2>
+    <div class="hint" style="max-width:320px">Enter the 6-digit admin code shown in the Apps Script log after running <b>setup</b>.</div></div>
+    <div class="section"><div class="field"><label>Admin code</label><input id="claimCode" inputmode="numeric" maxlength="6" placeholder="123456"></div></div>
+    <button class="btn" data-act="claim">Continue</button>`;
+}
+
+// ───────── Today ─────────
+async function loadToday() {
+  if (!S.items.length) loading();
+  try {
+    const d = await api('myDay');
+    Object.assign(S, { items: d.items, today: d.today, cfg: d.settings, week: d.week, month: d.month });
+    if (S.tab === 'today' && !S.stack.length) renderToday();
+  } catch (e) { fail(e); }
+}
+function daysBetween(a, b) { return Math.round((pd(b) - pd(a)) / 86400000); }
+function daysLeftTxt(end) { const n = daysBetween(S.today, end); return n <= 0 ? 'last day' : n + ' day' + (n === 1 ? '' : 's') + ' left'; }
+function statusClass(i) {
+  if (i.status === 'Done') return i.doneLate ? 'done-late' : 'done';
+  if (i.status === 'N/A') return 'na';
+  if (i.missed) return 'missed';
+  if (i.late) return 'late';
+  return '';
+}
+function statusTags(i) {
+  if (i.status === 'Done' && i.doneLate) return ['<span class="tag orange">Done late</span>'];
+  if (i.status === 'Pending' && i.missed) return ['<span class="tag red">Missed</span>'];
+  if (i.status === 'Pending' && i.late) return ['<span class="tag red">Late</span>'];
+  return [];
+}
+function deadlineText(i) {
+  const d = i.deadline.slice(0, 10), hm = i.deadline.slice(11);
+  return (d === S.today ? 'Today' : fmtFull(d)) + ', ' + (hm === '23:59' ? 'end of day' : fmt12(hm));
+}
+function renderToday() {
+  const items = S.items;
+  const due = items.filter(i => !i.optional && !i.flexible);
+  const done = due.filter(i => i.status === 'Done').length;
+  const late = due.filter(i => i.late).length;
+  const wk = items.filter(i => !i.optional && i.flexible === 'week');
+  const mo = items.filter(i => !i.optional && i.flexible === 'month');
+  const pct = due.length ? Math.round(done * 100 / due.length) : 0;
+  const left = due.length - done;
+  let html = `<div class="page-head"><h1>Today</h1></div>
+    <div class="hero"><div class="hero-top"><div style="flex:1"><div class="hint">${fmtFull(S.today)}</div>
+    <div class="hero-num">${done}<span> / ${due.length}</span></div>
+    <div class="hint">${left ? `${left} pending${late ? ` · <span style="color:var(--danger)">${late} late</span>` : ''}` : (due.length ? 'All done for today 🎉' : 'No tasks due today')}</div></div>
+    ${ring(done, due.length)}</div><div class="bar"><div style="width:${pct}%"></div></div>
+    ${wk.length || mo.length ? `<div class="mini-stats">
+      ${wk.length ? `<div><b>${wk.filter(i => i.status === 'Done').length}/${wk.length}</b>This week · ${daysLeftTxt(S.week.end)}</div>` : ''}
+      ${mo.length ? `<div><b>${mo.filter(i => i.status === 'Done').length}/${mo.length}</b>This month · ${daysLeftTxt(S.month.end)}</div>` : ''}</div>` : ''}</div>`;
+  if (!items.length) {
+    app.innerHTML = html + `<div class="empty">${S.boot.user.getsTasks ? 'No tasks right now 🎉' : 'No tasks are assigned to you.'}</div>`;
+    return;
+  }
+  const groups = [
+    ['🔴 Late', 'overdue', i => i.late && !i.optional],
+    ['☀️ Morning', 'by ' + fmt12(S.cfg.afternoonTime), i => !i.late && !i.optional && !i.flexible && i.shift === 'Morning'],
+    ['🌇 Evening', 'by end of day', i => !i.late && !i.optional && !i.flexible && i.shift === 'Evening'],
+    ['📌 General', 'by end of day', i => !i.late && !i.optional && !i.flexible && i.shift === 'General'],
+    ['📆 This week', 'by Sun ' + fmtShort(S.week.end), i => !i.late && !i.optional && i.flexible === 'week'],
+    ['🗓️ This month', 'by ' + fmtShort(S.month.end), i => !i.late && !i.optional && i.flexible === 'month'],
+    ['🔸 If applicable', 'when it happens', i => i.optional],
+  ];
+  groups.forEach(([label, sub, fn]) => {
+    const list = items.map((it, idx) => [it, idx]).filter(([it]) => fn(it));
+    if (!list.length) return;
+    const d = list.filter(([it]) => it.status !== 'Pending').length;
+    html += `<div class="section-title">${label}<span style="text-transform:none;opacity:.75">· ${sub}</span><span class="count">${d}/${list.length}</span></div>
+      <div class="section">${list.map(([it, idx]) => itemRow(it, idx)).join('')}</div>`;
+  });
+  if (items.some(i => i.optional)) html += '<div class="section-foot">“If applicable” tasks don’t count as pending. Mark them done when they happen.</div>';
+  app.innerHTML = html;
+}
+function itemRow(it, idx) {
+  const n = it.checklist.length;
+  const meta = [];
+  if (it.time) meta.push(`<span>🕘 ${fmt12(it.time)}</span>`);
+  if (it.category !== 'Daily') meta.push(`<span class="tag">${esc(it.category)}</span>`);
+  if (n) meta.push(`<span>☑ ${it.checked.length}/${n}</span>`);
+  meta.push(...statusTags(it));
+  if (it.status === 'Pending' && !it.flexible && it.dueDate < S.today) meta.push(`<span>Due ${fmtShort(it.dueDate)}</span>`);
+  if (it.status === 'Done' && it.updatedAt) meta.push(`<span>✓ ${timeOf(it.updatedAt)}${it.updatedAt.slice(0, 10) !== S.today ? ', ' + fmtShort(it.updatedAt.slice(0, 10)) : ''}</span>`);
+  if (it.status === 'N/A') meta.push('<span class="tag">N/A</span>');
+  if (it.remarks) meta.push('<span>💬</span>');
+  return `<div class="row indent ${it.status !== 'Pending' ? 'item-done' : ''} ${it.late ? 'is-late' : ''}">
+    <button class="check ${statusClass(it)}" data-act="toggle" data-idx="${idx}" aria-label="Toggle done">${CHECK_SVG}</button>
+    <div class="body tap" data-act="openItem" data-idx="${idx}"><div class="title">${esc(it.title)}</div>${meta.length ? `<div class="meta">${meta.join('')}</div>` : ''}</div>
+    <span class="chev" data-act="openItem" data-idx="${idx}">›</span></div>`;
+}
+async function toggleItem(idx) {
+  const it = S.items[idx];
+  if (!it) return;
+  if (it.status === 'Pending' && it.checklist.length && it.checked.length < it.checklist.length) return push(() => renderItem(it.taskId, it.dueDate));
+  const next = it.status === 'Pending' ? 'Done' : 'Pending';
+  const before = Object.assign({}, it);
+  Object.assign(it, { status: next, updatedAt: next === 'Done' ? nowStamp() : '' });
+  if (next === 'Pending' && it.checklist.length) it.checked = [];
+  if (next === 'Done') haptic('success'); else tap();
+  renderToday();
+  try { await saveItem(it, { status: next }); if (S.tab === 'today' && !S.stack.length) renderToday(); } catch (e) { Object.assign(it, before); renderToday(); fail(e); }
+}
+function nowStamp() { const d = new Date(); return S.today + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
+async function saveItem(it, changes) {
+  const res = await api('updateItem', Object.assign({ taskId: it.taskId, dueDate: it.dueDate }, changes));
+  const i = S.items.findIndex(x => x.taskId === res.taskId && x.dueDate === res.dueDate);
+  if (i >= 0) S.items[i] = res;
+  return res;
+}
+
+// ───────── Task detail ─────────
+function findItem(taskId, due) { return S.items.find(x => x.taskId === taskId && x.dueDate === due); }
+function renderItem(taskId, due) {
+  const it = findItem(taskId, due);
+  if (!it) return pop();
+  const n = it.checklist.length;
+  const tags = [`<span class="tag blue">${esc(it.category)}</span>`];
+  if (it.shift !== 'General' && !it.flexible) tags.push(`<span class="tag">${esc(it.shift)} shift</span>`);
+  if (it.optional) tags.push('<span class="tag orange">If applicable</span>');
+  if (it.status === 'Done') tags.push(it.doneLate ? '<span class="tag orange">Done late</span>' : '<span class="tag green">Done on time</span>');
+  else if (it.status === 'N/A') tags.push('<span class="tag">N/A</span>');
+  else tags.push(...statusTags(it));
+  let html = backLink() + `<div class="detail-title">${esc(it.title)}</div><div class="detail-tags">${tags.join('')}</div>`;
+  if (it.description) html += `<div class="detail-desc">${esc(it.description)}</div>`;
+  html += `<div class="section-title">Details</div><div class="section">
+    <div class="row"><div class="body">Schedule</div><div class="value">${esc(it.schedule)}</div></div>
+    ${it.optional ? '' : `<div class="row"><div class="body">Complete by</div><div class="value" style="${it.late ? 'color:var(--danger)' : ''}">${deadlineText(it)}</div></div>`}
+    ${it.time ? `<div class="row"><div class="body">Time</div><div class="value">${fmt12(it.time)}</div></div>` : ''}
+    ${it.status === 'Done' && it.updatedAt ? `<div class="row"><div class="body">Completed</div><div class="value">${it.updatedAt.slice(0, 10) === S.today ? 'Today' : fmtFull(it.updatedAt.slice(0, 10))}, ${timeOf(it.updatedAt)}</div></div>` : ''}
+  </div>`;
+  if (n) {
+    html += `<div class="section-title">Checklist<span class="count">${it.checked.length}/${n}</span></div><div class="section">` +
+      it.checklist.map((c, ci) => {
+        const on = it.checked.includes(ci);
+        return `<div class="row indent tap ${on ? 'item-done' : ''}" data-act="checkItem" data-ci="${ci}"><span class="check square ${on ? 'done' : ''}">${CHECK_SVG}</span><div class="body"><div class="title">${esc(c)}</div></div></div>`;
+      }).join('') + '</div><div class="section-foot">The task is marked done when every item is ticked.</div>';
+  }
+  html += `<div class="section-title">Remarks</div><div class="section"><div class="field"><textarea id="remarks" maxlength="500" placeholder="Add a note (optional)">${esc(it.remarks)}</textarea></div></div>
+    <button class="btn secondary" data-act="saveRemarks">Save remark</button>`;
+  if (it.status === 'Pending') {
+    if (!n) html += `<button class="btn" data-act="setStatus" data-status="Done">${it.late ? 'Mark as done (late)' : 'Mark as done'}</button>`;
+    if (it.optional) html += '<button class="btn secondary" data-act="setStatus" data-status="N/A">Not applicable</button>';
+  } else {
+    html += `<button class="btn danger" data-act="setStatus" data-status="Pending">${it.status === 'Done' ? 'Mark as not done' : 'Undo N/A'}</button>`;
+  }
+  app.innerHTML = html;
+  S.detail = { taskId, due };
+}
+async function detailChange(changes, okMsg, btn) {
+  const { taskId, due } = S.detail;
+  const wasDone = findItem(taskId, due).status === 'Done';
+  if (btn) btn.disabled = true;
+  try {
+    const res = await saveItem(findItem(taskId, due), changes);
+    if (res.status === 'Done' && !wasDone) { haptic('success'); if (res.doneLate) okMsg = 'Done (late) 🟠'; }
+    if (okMsg) toast(okMsg);
+    if (changes.status && changes.status !== 'Pending') { pop(); return true; }
+    renderItem(taskId, due);
+    return true;
+  } catch (e) { if (btn) btn.disabled = false; fail(e); return false; }
+}
+
+// ───────── Upcoming ─────────
+async function loadUpcoming() {
+  loading();
+  try {
+    const d = await api('upcoming');
+    if (S.tab !== 'upcoming' || S.stack.length) return;
+    let html = '<div class="page-head"><h1>Upcoming</h1></div><div class="section-foot" style="padding-top:0">Fixed-day weekly, monthly and one-time tasks for the next 31 days. “Any day / any time” tasks are on the Today tab.</div>';
+    if (!d.list.length) html += '<div class="empty">Nothing coming up.</div>';
+    const byDate = {};
+    d.list.forEach(x => (byDate[x.date] = byDate[x.date] || []).push(x));
+    Object.keys(byDate).sort().forEach(date => {
+      html += `<div class="section-title">${fmtFull(date)}</div><div class="section">` + byDate[date].map(x => `<div class="row"><div class="body"><div class="title">${esc(x.title)}</div>
+        <div class="meta"><span class="tag">${esc(x.category)}</span>${x.time ? `<span>🕘 ${fmt12(x.time)}</span>` : ''}${x.shift !== 'General' ? `<span>${esc(x.shift)}</span>` : ''}${x.optional ? '<span class="tag orange">If applicable</span>' : ''}</div></div></div>`).join('') + '</div>';
+    });
+    app.innerHTML = html;
+  } catch (e) { fail(e); }
+}
+
+// ───────── Team dashboard (admin) ─────────
+async function loadDashboard() {
+  loading();
+  try {
+    const d = await api('dashboard', { day: S.dashDay });
+    if (S.tab !== 'team' || S.stack.length) return;
+    S.dash = d;
+    renderDashboard();
+  } catch (e) { fail(e); }
+}
+function renderDashboard() {
+  const d = S.dash;
+  const m = d.members.slice().sort((a, b) => (b.late + b.missed) - (a.late + a.missed) || b.pending - a.pending || a.name.localeCompare(b.name));
+  const sum = k => m.reduce((a, x) => a + x[k], 0);
+  let html = `<div class="page-head"><h1>Team</h1></div>
+    <div class="section"><div class="field"><label>Date</label><input type="date" id="dashDay" value="${d.day}" max="${d.today}"></div></div>
+    <div class="stats"><div class="stat"><b style="color:var(--ok)">${sum('done') - sum('doneLate')}</b><span>Done on time</span></div>
+    <div class="stat"><b style="color:var(--warn)">${sum('late') + sum('doneLate')}</b><span>Late</span></div>
+    <div class="stat"><b style="color:var(--danger)">${d.isPast ? sum('missed') : sum('pending')}</b><span>${d.isPast ? 'Missed' : 'Pending'}</span></div></div>
+    <div class="legend"><span><i class="dot" style="background:var(--ok)"></i>On time</span><span><i class="dot" style="background:var(--warn)"></i>Done late</span><span><i class="dot" style="border:2px solid var(--danger);width:7px;height:7px"></i>Late</span><span><i class="dot" style="background:var(--danger)"></i>Missed</span></div>`;
+  if (!m.length) html += '<div class="empty">No members have tasks yet.</div>';
+  else html += '<div class="section-title">Progress</div><div class="section">' + m.map(x => {
+    const open = S.open[x.id];
+    const meta = [];
+    if (x.pending) meta.push(`<span style="color:var(--danger)">${x.pending} ${d.isPast ? 'not done' : 'pending'}</span>`);
+    else meta.push('<span style="color:var(--ok)">All done</span>');
+    if (x.late) meta.push(`<span class="tag red">${x.late} late</span>`);
+    if (x.doneLate) meta.push(`<span class="tag orange">${x.doneLate} done late</span>`);
+    if (x.weekTotal) meta.push(`<span>Week ${x.weekDone}/${x.weekTotal}</span>`);
+    if (x.monthTotal) meta.push(`<span>Month ${x.monthDone}/${x.monthTotal}</span>`);
+    let row = `<div class="row tap" data-act="toggleMember" data-id="${esc(x.id)}"><div class="avatar">${esc(initials(x.name))}</div>
+      <div class="body"><div class="title">${esc(x.name)}</div><div class="meta">${meta.join('')}</div></div>
+      <div class="value">${x.done}/${x.total}</div>${ring(x.done, x.total)}</div>`;
+    if (open) row += x.items.map(i => `<div class="row indent"><span class="check ${statusClass(i)}" style="width:22px;height:22px">${CHECK_SVG}</span>
+      <div class="body"><div class="title" style="font-size:15px">${esc(i.title)}</div><div class="meta">${i.category !== 'Daily' ? `<span class="tag">${esc(i.category)}</span>` : ''}${i.optional ? '<span class="tag orange">If applicable</span>' : ''}${statusTags(i).join('')}${i.status === 'Done' && i.updatedAt ? `<span>✓ ${timeOf(i.updatedAt)}</span>` : ''}${i.remarks ? `<span>💬 ${esc(i.remarks)}</span>` : ''}</div></div></div>`).join('');
+    return row;
+  }).join('') + '</div>';
+  app.innerHTML = html;
+  $('#dashDay').onchange = e => { S.dashDay = e.target.value; loadDashboard(); };
+}
+
+// ───────── Manage (admin) ─────────
+async function loadManage() {
+  loading();
+  try {
+    if (S.manageTab === 'tasks') S.tasksData = await api('listTasks');
+    if (S.manageTab === 'people') S.team = await api('listTeam');
+    if (S.manageTab === 'settings') S.settings = await api('getSettings');
+    if (S.tab === 'manage' && !S.stack.length) renderManage();
+  } catch (e) { fail(e); }
+}
+function renderManage() {
+  const need = { tasks: 'tasksData', people: 'team', settings: 'settings' }[S.manageTab];
+  if (!S[need]) return loadManage();
+  let html = `<div class="page-head"><h1>Manage</h1></div><div class="seg">
+    ${[['tasks', 'Tasks'], ['people', 'People'], ['settings', 'Settings']].map(([k, l]) => `<button data-act="manageTab" data-k="${k}" class="${S.manageTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  if (S.manageTab === 'tasks') html += tasksHtml();
+  if (S.manageTab === 'people') html += peopleHtml();
+  if (S.manageTab === 'settings') html += settingsHtml();
+  app.innerHTML = html;
+}
+function tasksHtml() {
+  const tasks = S.tasksData.tasks;
+  const list = S.taskFilter === 'All' ? tasks : tasks.filter(t => t.category === S.taskFilter);
+  let html = '<button class="btn" data-act="newTask" style="margin-top:12px">＋ New task</button>';
+  html += '<div class="chips" style="padding-top:0">' + ['All'].concat(CATS).map(c => `<button class="chip ${S.taskFilter === c ? 'on' : ''}" data-act="taskFilter" data-k="${c}">${c} · ${c === 'All' ? tasks.length : tasks.filter(t => t.category === c).length}</button>`).join('') + '</div>';
+  if (!list.length) return html + '<div class="empty">No tasks here yet.</div>';
+  const bySh = SHIFTS.map(s => [s, list.filter(t => t.shift === s)]).filter(([, l]) => l.length);
+  bySh.forEach(([s, l]) => {
+    html += `<div class="section-title">${s === 'General' ? 'General' : s + ' shift'}<span class="count">${l.length}</span></div><div class="section">` + l.map(t => {
+      const assigned = t.assignTo === 'All' ? 'All members' : t.assignTo.length + ' member' + (t.assignTo.length === 1 ? '' : 's');
+      return `<div class="row tap" data-act="editTask" data-id="${esc(t.id)}"><div class="body"><div class="title" style="${t.active ? '' : 'color:var(--hint)'}">${esc(t.title)}</div>
+        <div class="meta"><span>${esc(t.schedule)}</span>${t.time ? `<span>🕘 ${fmt12(t.time)}</span>` : ''}<span>👥 ${assigned}</span>${t.optional ? '<span class="tag orange">If applicable</span>' : ''}${t.checklist.length ? `<span>☑ ${t.checklist.length}</span>` : ''}${t.active ? '' : '<span class="tag">Inactive</span>'}</div></div><span class="chev">›</span></div>`;
+    }).join('') + '</div>';
+  });
+  return html;
+}
+function peopleHtml() {
+  const team = S.team;
+  const pending = team.filter(m => m.status === 'Pending');
+  const active = team.filter(m => m.status === 'Active');
+  const rejected = team.filter(m => m.status === 'Rejected');
+  const who = m => `<div class="avatar">${esc(initials(m.name))}</div><div class="body"><div class="title">${esc(m.name)}</div><div class="meta">${m.username ? '@' + esc(m.username) : 'No username'}${m.role === 'Admin' ? ' <span class="tag blue">Admin</span>' : ''}${m.status === 'Active' && !m.getsTasks ? ' <span class="tag">No “All” tasks</span>' : ''}</div></div>`;
+  let html = '';
+  if (pending.length) html += `<div class="section-title">Join requests<span class="count">${pending.length}</span></div><div class="section">` +
+    pending.map(m => `<div class="row">${who(m)}<button class="mini-btn ghost" data-act="review" data-id="${esc(m.id)}" data-ok="0">Reject</button><button class="mini-btn" data-act="review" data-id="${esc(m.id)}" data-ok="1">Approve</button></div>`).join('') + '</div>';
+  html += `<div class="section-title">Members<span class="count">${active.length}</span></div><div class="section">` +
+    active.map(m => `<div class="row tap" data-act="editMember" data-id="${esc(m.id)}">${who(m)}<span class="chev">›</span></div>`).join('') + '</div>';
+  html += '<div class="section-foot">New people join by opening the bot and tapping “Open Tasks”. Their request appears here and in your Telegram chat.</div>';
+  if (rejected.length) html += `<div class="section-title">Declined</div><div class="section">` +
+    rejected.map(m => `<div class="row">${who(m)}<button class="mini-btn" data-act="review" data-id="${esc(m.id)}" data-ok="1">Approve</button></div>`).join('') + '</div>';
+  return html;
+}
+function settingsHtml() {
+  const s = S.settings;
+  return `<div class="section-title">Daily reminders</div><div class="section">
+      <div class="field"><label>☀️ Morning: day plan (+ weekly/monthly checkpoints)</label><input type="time" id="s_m" value="${s.morningTime}"></div>
+      <div class="field"><label>🌤️ Afternoon: morning-task deadline</label><input type="time" id="s_a" value="${s.afternoonTime}"></div>
+      <div class="field"><label>🌆 Evening reminder</label><input type="time" id="s_e" value="${s.eveningTime}"></div>
+      <div class="field"><label>🌙 Night: final reminder before midnight</label><input type="time" id="s_n" value="${s.nightTime}"></div>
+      <div class="row"><div class="body"><div class="title">Daily report to admins</div><div class="meta">Sent with the morning reminder: yesterday’s on-time / late / missed per member.</div></div><label class="switch"><input type="checkbox" id="s_sum" ${s.adminSummary ? 'checked' : ''}><span></span></label></div>
+    </div>
+    <div class="section-foot">Morning-shift tasks are late after the Afternoon time. Evening and general tasks are late after midnight. Weekly “any day” tasks are due by Sunday, monthly “any time” tasks by the last day of the month. Timezone: ${esc(s.timeZone)}.</div>
+    <button class="btn" data-act="saveSettings">Save settings</button>
+    <div class="section-title">Send now</div><div class="section">
+      <div class="row tap" data-act="sendNow" data-k="test"><div class="body"><div class="title">Send me a test message</div></div><span class="chev">›</span></div>
+      <div class="row tap" data-act="sendNow" data-k="morning"><div class="body"><div class="title">☀️ Morning reminder to everyone</div></div><span class="chev">›</span></div>
+      <div class="row tap" data-act="sendNow" data-k="afternoon"><div class="body"><div class="title">🌤️ Afternoon check to everyone</div></div><span class="chev">›</span></div>
+      <div class="row tap" data-act="sendNow" data-k="evening"><div class="body"><div class="title">🌆 Evening reminder to everyone</div></div><span class="chev">›</span></div>
+      <div class="row tap" data-act="sendNow" data-k="night"><div class="body"><div class="title">🌙 Night reminder to everyone</div></div><span class="chev">›</span></div>
+    </div><div class="section-foot">Bot: @${esc(s.botUsername)}</div>`;
+}
+
+// ───────── Task editor (admin) ─────────
+function renderTaskEditor(id) {
+  const t = (id && S.tasksData.tasks.find(x => x.id === id)) || {
+    title: '', description: '', category: 'Daily', weeklyDays: [], weeklyAny: true, monthlyDate: 1, monthlyAny: true, dueDate: S.today,
+    shift: 'Morning', time: '', optional: false, checklist: [], assignTo: 'All', active: true,
+  };
+  const members = S.tasksData.members;
+  const sel = t.assignTo === 'All' ? [] : t.assignTo;
+  S.editWeek = t.weeklyAny ? 'any' : 'fixed';
+  S.editMonth = t.monthlyAny ? 'any' : 'fixed';
+  S.editAssign = t.assignTo === 'All' ? 'All' : 'Some';
+  const seg = (act, cur, opts) => `<div class="seg" style="margin:6px 0 0">${opts.map(([k, l]) => `<button type="button" data-act="${act}" data-k="${k}" class="${cur === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  app.innerHTML = backLink() + `<div class="page-head"><h1>${id ? 'Edit task' : 'New task'}</h1></div>
+    <div class="section-title">Task</div><div class="section">
+      <div class="field"><label>Title *</label><input id="f_title" maxlength="200" value="${esc(t.title)}" placeholder="e.g. Morning Readiness – Bus & Captain"></div>
+      <div class="field"><label>Description</label><textarea id="f_desc" maxlength="1000" placeholder="Optional details">${esc(t.description)}</textarea></div>
+    </div>
+    <div class="section-title">Schedule</div><div class="section">
+      <div class="field"><label>Category</label><select id="f_cat">${CATS.map(c => `<option ${c === t.category ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+      <div class="field" id="w_week"><label>When in the week?</label>${seg('weekMode', S.editWeek, [['any', 'Any day (by Sunday)'], ['fixed', 'Fixed days']])}
+        <div class="daypick ${S.editWeek === 'fixed' ? '' : 'hide'}" id="f_days" style="margin-top:8px">${DAYS.map(d => `<button type="button" data-act="day" data-k="${d}" class="${t.weeklyDays.includes(d) ? 'on' : ''}">${d}</button>`).join('')}</div></div>
+      <div class="field" id="w_month"><label>When in the month?</label>${seg('monthMode', S.editMonth, [['any', 'Any time (by month end)'], ['fixed', 'Fixed date']])}
+        <input id="f_mdate" type="number" min="1" max="31" inputmode="numeric" placeholder="Date (1–31)" value="${esc(t.monthlyDate || 1)}" class="${S.editMonth === 'fixed' ? '' : 'hide'}" style="margin-top:10px"></div>
+      <div class="field" id="w_date"><label>Due date</label><input id="f_date" type="date" value="${esc(t.dueDate || S.today)}"></div>
+      <div class="field" id="w_shift"><label>Shift</label><select id="f_shift">${SHIFTS.map(s => `<option value="${s}" ${s === t.shift ? 'selected' : ''}>${s === 'Morning' ? 'Morning (due by afternoon)' : s === 'Evening' ? 'Evening (due by end of day)' : 'General (due by end of day)'}</option>`).join('')}</select></div>
+      <div class="field"><label>Time (optional, shown on the task, e.g. a meeting at 11:30 AM)</label><input id="f_time" type="time" value="${esc(t.time)}"></div>
+    </div>
+    <div class="section-title">Options</div><div class="section">
+      <div class="row"><div class="body"><div class="title">If applicable</div><div class="meta">Only when it happens (e.g. incidents). Not counted as pending, no reminders.</div></div><label class="switch"><input type="checkbox" id="f_opt" ${t.optional ? 'checked' : ''}><span></span></label></div>
+      <div class="row"><div class="body"><div class="title">Active</div><div class="meta">Inactive tasks are hidden and get no reminders.</div></div><label class="switch"><input type="checkbox" id="f_active" ${t.active ? 'checked' : ''}><span></span></label></div>
+      <div class="field"><label>Checklist (one item per line, optional)</label><textarea id="f_check" placeholder="RC&#10;Permit&#10;Road Tax&#10;Fitness Certificate">${esc(t.checklist.join('\n'))}</textarea></div>
+    </div>
+    <div class="section-title">Assign to</div>
+    <div class="seg" style="margin-top:0"><button type="button" data-act="assignMode" data-k="All" class="${S.editAssign === 'All' ? 'on' : ''}">All members</button><button type="button" data-act="assignMode" data-k="Some" class="${S.editAssign === 'All' ? '' : 'on'}">Selected</button></div>
+    <div class="section ${S.editAssign === 'All' ? 'hide' : ''}" id="f_members" style="margin-top:10px">${members.map(m => `<div class="row tap indent" data-act="pickMember" data-id="${esc(m.id)}"><span class="check square ${sel.includes(m.id) ? 'done' : ''}">${CHECK_SVG}</span><div class="body"><div class="title">${esc(m.name)}</div></div></div>`).join('') || '<div class="empty">No members yet</div>'}</div>
+    <div class="section-foot" id="f_allnote">${S.editAssign === 'All' ? 'Every member with “Gets tasks” turned on.' : ''}</div>
+    <button class="btn" data-act="saveTask" data-id="${esc(id || '')}" style="margin-top:20px">Save task</button>
+    ${id ? `<button class="btn danger" data-act="deleteTask" data-id="${esc(id)}">Delete task</button>` : ''}`;
+  const sync = () => {
+    const c = $('#f_cat').value;
+    $('#w_week').classList.toggle('hide', c !== 'Weekly');
+    $('#w_month').classList.toggle('hide', c !== 'Monthly');
+    $('#w_date').classList.toggle('hide', c !== 'One-time');
+    const flexible = (c === 'Weekly' && S.editWeek === 'any') || (c === 'Monthly' && S.editMonth === 'any');
+    $('#w_shift').classList.toggle('hide', flexible);
+  };
+  S.syncEditor = sync;
+  $('#f_cat').onchange = sync;
+  sync();
+}
+function collectTask(id) {
+  return {
+    id,
+    title: $('#f_title').value,
+    description: $('#f_desc').value,
+    category: $('#f_cat').value,
+    weeklyAny: S.editWeek === 'any',
+    weeklyDays: [...document.querySelectorAll('#f_days button.on')].map(b => b.dataset.k),
+    monthlyAny: S.editMonth === 'any',
+    monthlyDate: $('#f_mdate').value,
+    dueDate: $('#f_date').value,
+    shift: $('#w_shift').classList.contains('hide') ? 'General' : $('#f_shift').value,
+    time: $('#f_time').value,
+    optional: $('#f_opt').checked,
+    active: $('#f_active').checked,
+    checklist: $('#f_check').value.split('\n'),
+    assignTo: S.editAssign === 'All' ? 'All' : [...document.querySelectorAll('#f_members .check.done')].map(el => el.closest('[data-id]').dataset.id),
+  };
+}
+
+// ───────── Member editor (admin) ─────────
+function renderMemberEditor(id) {
+  const m = S.team.find(x => x.id === id);
+  if (!m) return pop();
+  app.innerHTML = backLink() + `<div class="page-head"><h1>${esc(m.name)}</h1></div>
+    <div class="section-foot" style="padding-top:0">${m.username ? '@' + esc(m.username) + ' · ' : ''}Joined ${esc((m.joinedAt || '').slice(0, 10))}</div>
+    <div class="section-title">Profile</div><div class="section"><div class="field"><label>Name</label><input id="m_name" value="${esc(m.name)}"></div></div>
+    <div class="section-title">Role</div>
+    <div class="seg" style="margin-top:0"><button type="button" data-act="role" data-k="Member" class="${m.role === 'Member' ? 'on' : ''}">Member</button><button type="button" data-act="role" data-k="Admin" class="${m.role === 'Admin' ? 'on' : ''}">Admin</button></div>
+    <div class="section" style="margin-top:14px"><div class="row"><div class="body"><div class="title">Gets tasks</div><div class="meta">Receives tasks assigned to “All members”.</div></div><label class="switch"><input type="checkbox" id="m_gets" ${m.getsTasks ? 'checked' : ''}><span></span></label></div></div>
+    <button class="btn" data-act="saveMember" data-id="${esc(m.id)}" style="margin-top:20px">Save</button>
+    ${m.id === S.boot.user.id ? '' : `<button class="btn danger" data-act="removeMember" data-id="${esc(m.id)}">Remove from team</button>`}`;
+  S.editRole = m.role;
+}
+
+// ───────── Click actions ─────────
+const ACTIONS = {
+  back: () => pop(),
+  async claim(el) {
+    el.disabled = true;
+    try { const b = await api('claimAdmin', { code: $('#claimCode').value }); haptic('success'); handleBoot(b); } catch (e) { el.disabled = false; fail(e); }
+  },
+  toggle: el => toggleItem(Number(el.dataset.idx)),
+  openItem(el) { const it = S.items[Number(el.dataset.idx)]; tap(); push(() => renderItem(it.taskId, it.dueDate)); },
+  checkItem(el) {
+    const it = findItem(S.detail.taskId, S.detail.due);
+    const ci = Number(el.dataset.ci);
+    const before = it.checked;
+    const checked = before.includes(ci) ? before.filter(x => x !== ci) : before.concat(ci);
+    tap();
+    it.checked = checked; // optimistic
+    renderItem(S.detail.taskId, S.detail.due);
+    detailChange({ checked }, checked.length === it.checklist.length ? 'All items ticked, task done ✅' : '')
+      .then(okd => { if (!okd) { it.checked = before; renderItem(S.detail.taskId, S.detail.due); } });
+  },
+  saveRemarks: el => detailChange({ remarks: $('#remarks').value }, 'Remark saved', el),
+  setStatus(el) {
+    const st = el.dataset.status;
+    detailChange({ status: st, remarks: $('#remarks').value }, st === 'Done' ? 'Task done ✅' : st === 'N/A' ? 'Marked as not applicable' : 'Marked as not done', el);
+  },
+  toggleMember(el) { S.open[el.dataset.id] = !S.open[el.dataset.id]; tap(); renderDashboard(); },
+  manageTab(el) { S.manageTab = el.dataset.k; tap(); renderManage(); },
+  taskFilter(el) { S.taskFilter = el.dataset.k; tap(); renderManage(); },
+  newTask() { push(() => renderTaskEditor('')); },
+  editTask(el) { const id = el.dataset.id; push(() => renderTaskEditor(id)); },
+  day(el) { el.classList.toggle('on'); tap(); },
+  weekMode(el) {
+    S.editWeek = el.dataset.k;
+    el.parentNode.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === el));
+    $('#f_days').classList.toggle('hide', S.editWeek !== 'fixed');
+    S.syncEditor(); tap();
+  },
+  monthMode(el) {
+    S.editMonth = el.dataset.k;
+    el.parentNode.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === el));
+    $('#f_mdate').classList.toggle('hide', S.editMonth !== 'fixed');
+    S.syncEditor(); tap();
+  },
+  assignMode(el) {
+    S.editAssign = el.dataset.k;
+    el.parentNode.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === el));
+    $('#f_members').classList.toggle('hide', S.editAssign === 'All');
+    $('#f_allnote').textContent = S.editAssign === 'All' ? 'Every member with “Gets tasks” turned on.' : '';
+    tap();
+  },
+  pickMember(el) { el.querySelector('.check').classList.toggle('done'); tap(); },
+  async saveTask(el) {
+    el.disabled = true;
+    try { S.tasksData = await api('saveTask', collectTask(el.dataset.id)); haptic('success'); toast('Task saved'); pop(); } catch (e) { el.disabled = false; fail(e); }
+  },
+  async deleteTask(el) {
+    if (!(await confirmBox('Delete this task? Its past history stays in the TaskLog sheet.'))) return;
+    el.disabled = true;
+    try { S.tasksData = await api('deleteTask', { id: el.dataset.id }); toast('Task deleted'); pop(); } catch (e) { el.disabled = false; fail(e); }
+  },
+  async review(el) {
+    const ok = el.dataset.ok === '1';
+    if (!ok && !(await confirmBox('Decline this join request?'))) return;
+    el.disabled = true;
+    try { S.team = await api('reviewMember', { id: el.dataset.id, approve: ok }); haptic('success'); toast(ok ? 'Approved' : 'Declined'); renderManage(); } catch (e) { el.disabled = false; fail(e); }
+  },
+  editMember(el) { const id = el.dataset.id; push(() => renderMemberEditor(id)); },
+  role(el) { S.editRole = el.dataset.k; el.parentNode.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === el)); tap(); },
+  async saveMember(el) {
+    el.disabled = true;
+    try { S.team = await api('saveMember', { id: el.dataset.id, name: $('#m_name').value, role: S.editRole, getsTasks: $('#m_gets').checked }); S.tasksData = null; haptic('success'); toast('Saved'); pop(); } catch (e) { el.disabled = false; fail(e); }
+  },
+  async removeMember(el) {
+    if (!(await confirmBox('Remove this person from the team? Their past history is kept.'))) return;
+    el.disabled = true;
+    try { S.team = await api('removeMember', { id: el.dataset.id }); S.tasksData = null; toast('Removed'); pop(); } catch (e) { el.disabled = false; fail(e); }
+  },
+  async saveSettings(el) {
+    el.disabled = true;
+    try {
+      S.settings = await api('saveSettings', { morningTime: $('#s_m').value, afternoonTime: $('#s_a').value, eveningTime: $('#s_e').value, nightTime: $('#s_n').value, adminSummary: $('#s_sum').checked });
+      S.cfg = { morningTime: S.settings.morningTime, afternoonTime: S.settings.afternoonTime, eveningTime: S.settings.eveningTime, nightTime: S.settings.nightTime };
+      haptic('success'); toast('Settings saved'); renderManage();
+    } catch (e) { el.disabled = false; fail(e); }
+  },
+  async sendNow(el) {
+    const k = el.dataset.k;
+    if (k !== 'test' && !(await confirmBox('Send this to the whole team now?'))) return;
+    try { const r = await api('sendNow', { type: k }); haptic('success'); toast(r.sent + ' message' + (r.sent === 1 ? '' : 's') + ' sent'); } catch (e) { fail(e); }
+  },
+};
+app.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (!el || el.disabled) return;
+  const fn = ACTIONS[el.dataset.act];
+  if (fn) fn(el);
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.boot && S.boot.state === 'active' && S.tab === 'today' && !S.stack.length) loadToday(); });
+
+boot();
+</script>
+</body>
+</html>
