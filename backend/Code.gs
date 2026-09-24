@@ -35,6 +35,7 @@ const MAX_LINES = 30;
 
 /** Run once from the Apps Script editor after filling in CONFIG. Safe to run again. */
 function setup() {
+  resetMemo_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) throw new Error('Create this script from inside a Google Sheet (Extensions → Apps Script).');
   const token = CONFIG.BOT_TOKEN.trim();
@@ -111,6 +112,7 @@ function doGet() {
 }
 
 function doPost(e) {
+  resetMemo_();
   let req;
   try {
     req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
@@ -339,7 +341,7 @@ function apiSaveTask_(ctx, input) {
 function apiDeleteTask_(ctx, args) {
   withLock_(() => {
     const ex = getTasks_().find(x => x.id === args.id);
-    if (ex) sheet_(SHEET_TASKS).deleteRow(ex.row);
+    if (ex) deleteRow_(SHEET_TASKS, ex.row);
   });
   return apiListTasks_();
 }
@@ -374,7 +376,7 @@ function apiRemoveMember_(ctx, args) {
   if (String(args.id) === ctx.member.id) throw new Error('You cannot remove yourself.');
   withLock_(() => {
     const ex = getTeam_().find(x => x.id === String(args.id));
-    if (ex) sheet_(SHEET_TEAM).deleteRow(ex.row);
+    if (ex) deleteRow_(SHEET_TEAM, ex.row);
   });
   return apiListTeam_();
 }
@@ -393,6 +395,7 @@ function apiSaveSettings_(ctx, args) {
     MORNING_TIME: times[0], AFTERNOON_TIME: times[1], EVENING_TIME: times[2], NIGHT_TIME: times[3],
     ADMIN_SUMMARY: args.adminSummary ? 'Yes' : 'No',
   });
+  delete MEMO_.settings;
   return apiGetSettings_();
 }
 
@@ -446,7 +449,7 @@ function updateItem_(member, taskId, dueDate, changes) {
     const updatedAt = nowStr_();
     const empty = status === 'Pending' && !checked.length && !remarks;
     if (empty) {
-      if (entry) sheet_(SHEET_LOG).deleteRow(entry.row);
+      if (entry) deleteRow_(SHEET_LOG, entry.row);
       delete logMap[key_(taskId, member.id, dueDate)];
     } else {
       // Keep the original completion time when only remarks/checklist change on a done task
@@ -585,6 +588,7 @@ function answerCallback_(id, text, alert) {
 
 /** Runs every 5 minutes and sends the 8 AM / 2 PM / 8 PM / 11 PM reminders when their time arrives. */
 function tick() {
+  resetMemo_();
   const p = props_();
   if (!p.getProperty('BOT_TOKEN')) return;
   const lock = LockService.getScriptLock();
@@ -1067,7 +1071,16 @@ function getLogMap_() {
   return map;
 }
 
+/**
+ * Per-execution cache. Each web request / trigger run starts fresh (resetMemo_), so a sheet is read
+ * at most once per request instead of several times. Any write to a sheet drops its cached rows.
+ */
+let MEMO_ = {};
+function resetMemo_() { MEMO_ = { rows: {} }; }
+resetMemo_();
+
 function readRows_(name) {
+  if (MEMO_.rows[name]) return MEMO_.rows[name];
   const values = sheet_(name).getDataRange().getValues();
   const headers = values.shift() || [];
   const rows = [];
@@ -1077,6 +1090,7 @@ function readRows_(name) {
     headers.forEach((h, j) => { o[h] = row[j]; });
     rows.push(o);
   });
+  MEMO_.rows[name] = rows;
   return rows;
 }
 
@@ -1084,11 +1098,18 @@ function appendRow_(name, values) {
   const sh = sheet_(name);
   const range = sh.getRange(sh.getLastRow() + 1, 1, 1, values.length);
   range.setNumberFormat('@').setValues([values.map(v => (v === null || v === undefined ? '' : String(v)))]);
+  delete MEMO_.rows[name];
 }
 
 function writeRow_(name, row, values) {
   sheet_(name).getRange(row, 1, 1, values.length).setNumberFormat('@')
     .setValues([values.map(v => (v === null || v === undefined ? '' : String(v)))]);
+  delete MEMO_.rows[name];
+}
+
+function deleteRow_(name, row) {
+  sheet_(name).deleteRow(row);
+  delete MEMO_.rows[name];
 }
 
 // ───────────────────────── Helpers ─────────────────────────
@@ -1097,9 +1118,11 @@ function props_() { return PropertiesService.getScriptProperties(); }
 function token_() { return props_().getProperty('BOT_TOKEN'); }
 
 function settings_() {
+  if (MEMO_.settings) return MEMO_.settings;
   const p = props_().getProperties();
   const s = {};
   Object.keys(DEFAULT_SETTINGS).forEach(k => { s[k] = p[k] || DEFAULT_SETTINGS[k]; });
+  MEMO_.settings = s;
   return s;
 }
 
@@ -1117,8 +1140,10 @@ function publicSettings_() {
 }
 
 function ss_() {
+  if (MEMO_.ss) return MEMO_.ss;
   const id = props_().getProperty('SPREADSHEET_ID');
-  return id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
+  MEMO_.ss = id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
+  return MEMO_.ss;
 }
 
 function sheet_(name) {
@@ -1130,6 +1155,8 @@ function sheet_(name) {
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
+  // Another request may have written while we waited: re-read sheets inside the lock
+  MEMO_.rows = {};
   try { return fn(); } finally { lock.releaseLock(); }
 }
 

@@ -322,6 +322,13 @@ function handleBoot(b) {
   S.cfg = b.settings;
   S.tab = b.user.getsTasks || !isAdmin() ? 'today' : 'team';
   openTab();
+  if (isAdmin()) setTimeout(prefetchAdmin, 800);
+}
+// Load admin screens in the background so switching tabs doesn't wait on the server
+function prefetchAdmin() {
+  api('listTasks').then(d => { if (!S.pendingSaves) S.tasksData = d; }).catch(() => {});
+  api('listTeam').then(d => { S.team = d; }).catch(() => {});
+  api('getSettings').then(d => { S.settings = d; }).catch(() => {});
 }
 function screen(icon, title, text, extra) {
   setTabsVisible(false);
@@ -509,10 +516,16 @@ async function detailChange(changes, okMsg, btn) {
 
 // ───────── Upcoming ─────────
 async function loadUpcoming() {
-  loading();
+  if (S.upcoming) renderUpcoming(S.upcoming); else loading();
   try {
     const d = await api('upcoming');
+    S.upcoming = d;
     if (S.tab !== 'upcoming' || S.stack.length) return;
+    renderUpcoming(d);
+  } catch (e) { fail(e); }
+}
+function renderUpcoming(d) {
+  {
     let html = '<div class="page-head"><h1>Upcoming</h1></div><div class="section-foot" style="padding-top:0">Fixed-day weekly, monthly and one-time tasks for the next 31 days. “Any day / any time” tasks are on the Today tab.</div>';
     if (!d.list.length) html += '<div class="empty">Nothing coming up.</div>';
     const byDate = {};
@@ -522,12 +535,12 @@ async function loadUpcoming() {
         <div class="meta"><span class="tag">${esc(x.category)}</span>${x.time ? `<span>🕘 ${fmt12(x.time)}</span>` : ''}${x.shift !== 'General' ? `<span>${esc(x.shift)}</span>` : ''}${x.optional ? '<span class="tag orange">If applicable</span>' : ''}</div></div></div>`).join('') + '</div>';
     });
     app.innerHTML = html;
-  } catch (e) { fail(e); }
+  }
 }
 
 // ───────── Team dashboard (admin) ─────────
 async function loadDashboard() {
-  loading();
+  if (S.dash && S.dash.day === (S.dashDay || S.dash.today)) renderDashboard(); else loading();
   try {
     const d = await api('dashboard', { day: S.dashDay });
     if (S.tab !== 'team' || S.stack.length) return;
@@ -567,17 +580,23 @@ function renderDashboard() {
 }
 
 // ───────── Manage (admin) ─────────
+const MANAGE_DATA = { tasks: ['tasksData', 'listTasks'], people: ['team', 'listTeam'], settings: ['settings', 'getSettings'] };
 async function loadManage() {
-  loading();
+  const [key, action] = MANAGE_DATA[S.manageTab];
+  const tabNow = S.manageTab;
+  if (S[key]) renderManage(); else loading();
+  if (key === 'tasksData' && S.pendingSaves) return; // don't overwrite tasks that are still saving
   try {
-    if (S.manageTab === 'tasks') S.tasksData = await api('listTasks');
-    if (S.manageTab === 'people') S.team = await api('listTeam');
-    if (S.manageTab === 'settings') S.settings = await api('getSettings');
-    if (S.tab === 'manage' && !S.stack.length) renderManage();
+    const d = await api(action);
+    if (key === 'tasksData' && S.pendingSaves) return;
+    S[key] = d;
+    // Re-render only if the admin is still on the same list (never while they are editing settings)
+    if (S.tab === 'manage' && !S.stack.length && S.manageTab === tabNow && tabNow !== 'settings') renderManage();
+    else if (S.tab === 'manage' && !S.stack.length && S.manageTab === tabNow && !app.querySelector('#s_m')) renderManage();
   } catch (e) { fail(e); }
 }
 function renderManage() {
-  const need = { tasks: 'tasksData', people: 'team', settings: 'settings' }[S.manageTab];
+  const need = MANAGE_DATA[S.manageTab][0];
   if (!S[need]) return loadManage();
   let html = `<div class="page-head"><h1>Manage</h1></div><div class="seg">
     ${[['tasks', 'Tasks'], ['people', 'People'], ['settings', 'Settings']].map(([k, l]) => `<button data-act="manageTab" data-k="${k}" class="${S.manageTab === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
@@ -597,7 +616,7 @@ function tasksHtml() {
     html += `<div class="section-title">${s === 'General' ? 'General' : s + ' shift'}<span class="count">${l.length}</span></div><div class="section">` + l.map(t => {
       const assigned = t.assignTo === 'All' ? 'All members' : t.assignTo.length + ' member' + (t.assignTo.length === 1 ? '' : 's');
       return `<div class="row tap" data-act="editTask" data-id="${esc(t.id)}"><div class="body"><div class="title" style="${t.active ? '' : 'color:var(--hint)'}">${esc(t.title)}</div>
-        <div class="meta"><span>${esc(t.schedule)}</span>${t.time ? `<span>🕘 ${fmt12(t.time)}</span>` : ''}<span>👥 ${assigned}</span>${t.optional ? '<span class="tag orange">If applicable</span>' : ''}${t.checklist.length ? `<span>☑ ${t.checklist.length}${t.checklist.some(c => c.optional) ? ` (${t.checklist.filter(c => c.optional).length} optional)` : ''}</span>` : ''}${t.active ? '' : '<span class="tag">Inactive</span>'}</div></div><span class="chev">›</span></div>`;
+        <div class="meta"><span>${esc(t.schedule)}</span>${t.time ? `<span>🕘 ${fmt12(t.time)}</span>` : ''}<span>👥 ${assigned}</span>${t.optional ? '<span class="tag orange">If applicable</span>' : ''}${t.checklist.length ? `<span>☑ ${t.checklist.length}${t.checklist.some(c => c.optional) ? ` (${t.checklist.filter(c => c.optional).length} optional)` : ''}</span>` : ''}${t.active ? '' : '<span class="tag">Inactive</span>'}${t.saving ? '<span class="tag blue">Saving…</span>' : ''}</div></div><span class="chev">›</span></div>`;
     }).join('') + '</div>';
   });
   return html;
@@ -639,11 +658,11 @@ function settingsHtml() {
 }
 
 // ───────── Task editor (admin) ─────────
-function renderTaskEditor(id) {
-  const t = (id && S.tasksData.tasks.find(x => x.id === id)) || {
+function renderTaskEditor(id, preset) {
+  const t = (id && S.tasksData.tasks.find(x => x.id === id)) || Object.assign({
     title: '', description: '', category: 'Daily', weeklyDays: [], weeklyAny: true, monthlyDate: 1, monthlyAny: true, dueDate: S.today,
     shift: 'Morning', time: '', optional: false, checklist: [], assignTo: 'All', active: true,
-  };
+  }, preset || {});
   const members = S.tasksData.members;
   const sel = t.assignTo === 'All' ? [] : t.assignTo;
   S.editWeek = t.weeklyAny ? 'any' : 'fixed';
@@ -677,6 +696,7 @@ function renderTaskEditor(id) {
     <div class="section ${S.editAssign === 'All' ? 'hide' : ''}" id="f_members" style="margin-top:10px">${members.map(m => `<div class="row tap indent" data-act="pickMember" data-id="${esc(m.id)}"><span class="check square ${sel.includes(m.id) ? 'done' : ''}">${CHECK_SVG}</span><div class="body"><div class="title">${esc(m.name)}</div></div></div>`).join('') || '<div class="empty">No members yet</div>'}</div>
     <div class="section-foot" id="f_allnote">${S.editAssign === 'All' ? 'Every member with “Gets tasks” turned on.' : ''}</div>
     <button class="btn" data-act="saveTask" data-id="${esc(id || '')}" style="margin-top:20px">Save task</button>
+    ${id ? '' : '<button class="btn secondary" data-act="saveTask" data-id="" data-another="1">Save &amp; add another</button>'}
     ${id ? `<button class="btn danger" data-act="deleteTask" data-id="${esc(id)}">Delete task</button>` : ''}`;
   const sync = () => {
     const c = $('#f_cat').value;
@@ -690,6 +710,39 @@ function renderTaskEditor(id) {
   $('#f_cat').onchange = sync;
   sync();
 }
+// Saves run one at a time in the background; the list updates right away and is fixed up if the server says no
+S.saveChain = Promise.resolve();
+S.pendingSaves = 0;
+function queueSave(run, okMsg, rollback) {
+  S.pendingSaves++;
+  S.saveChain = S.saveChain.then(run).then(d => {
+    S.pendingSaves--;
+    if (!S.pendingSaves) S.tasksData = d;
+    toast(okMsg);
+  }, e => {
+    S.pendingSaves--;
+    if (!S.pendingSaves) {
+      S.tasksData.tasks = rollback;
+      api('listTasks').then(d => { S.tasksData = d; if (S.tab === 'manage' && !S.stack.length && S.manageTab === 'tasks') renderManage(); }).catch(() => {});
+    }
+    fail(e);
+  }).then(() => { if (S.tab === 'manage' && !S.stack.length && S.manageTab === 'tasks') renderManage(); });
+}
+function validateTask(t) {
+  if (!t.title.trim()) return 'Task title is required.';
+  if (t.category === 'Weekly' && !t.weeklyAny && !t.weeklyDays.length) return 'Please select at least one day, or choose "Any day".';
+  if (t.category === 'Monthly' && !t.monthlyAny && !(Number(t.monthlyDate) >= 1 && Number(t.monthlyDate) <= 31)) return 'Please enter a date between 1 and 31.';
+  if (t.category === 'One-time' && !t.dueDate) return 'Please select a due date.';
+  if (t.assignTo !== 'All' && !t.assignTo.length) return 'Please select at least one member, or assign to All.';
+  return '';
+}
+function scheduleText(t) {
+  if (t.category === 'Daily') return 'Every day';
+  if (t.category === 'Weekly') return t.weeklyDays.length ? 'Every ' + DAYS.filter(d => t.weeklyDays.includes(d)).join(', ') : 'Any day each week';
+  if (t.category === 'Monthly') return t.monthlyDate ? 'Monthly on the ' + ordinal(t.monthlyDate) : 'Any time each month';
+  return t.dueDate ? 'On ' + fmtShort(t.dueDate) + ' ' + t.dueDate.slice(0, 4) : '';
+}
+function ordinal(n) { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
 function ckRow(c) {
   c = c || { text: '', optional: false };
   return `<div class="ck-row"><input maxlength="120" value="${esc(c.text)}" placeholder="e.g. RC, Permit, Breathalyzer">
@@ -760,7 +813,7 @@ const ACTIONS = {
   manageTab(el) { S.manageTab = el.dataset.k; tap(); renderManage(); },
   taskFilter(el) { S.taskFilter = el.dataset.k; tap(); renderManage(); },
   newTask() { push(() => renderTaskEditor('')); },
-  editTask(el) { const id = el.dataset.id; push(() => renderTaskEditor(id)); },
+  editTask(el) { const id = el.dataset.id; if (id.startsWith('saving-')) return toast('Still saving, try again in a moment'); push(() => renderTaskEditor(id)); },
   day(el) { el.classList.toggle('on'); tap(); },
   addCheck(el) { el.insertAdjacentHTML('beforebegin', ckRow()); el.previousElementSibling.querySelector('input').focus(); },
   ckOpt(el) { const on = el.classList.toggle('on'); el.textContent = on ? 'Optional' : 'Required'; tap(); },
@@ -785,14 +838,41 @@ const ACTIONS = {
     tap();
   },
   pickMember(el) { el.querySelector('.check').classList.toggle('done'); tap(); },
-  async saveTask(el) {
-    el.disabled = true;
-    try { S.tasksData = await api('saveTask', collectTask(el.dataset.id)); haptic('success'); toast('Task saved'); pop(); } catch (e) { el.disabled = false; fail(e); }
+  saveTask(el) {
+    const data = collectTask(el.dataset.id);
+    const err = validateTask(data);
+    if (err) return fail(new Error(err));
+    haptic('success');
+    const tasks = S.tasksData.tasks;
+    const before = tasks.slice();
+    const draft = Object.assign({}, data, {
+      id: data.id || 'saving-' + Date.now(), saving: true,
+      weeklyDays: data.weeklyAny ? [] : data.weeklyDays,
+      monthlyDate: data.monthlyAny ? '' : Number(data.monthlyDate),
+      checklist: data.checklist.filter(c => c.text.trim()),
+    });
+    draft.schedule = scheduleText(draft);
+    const i = tasks.findIndex(x => x.id === data.id);
+    if (i >= 0) tasks[i] = draft; else tasks.push(draft);
+    if (el.dataset.another === '1') {
+      // Keep the schedule settings so similar tasks can be added quickly
+      renderTaskEditor('', { category: data.category, weeklyAny: data.weeklyAny, weeklyDays: data.weeklyDays, monthlyAny: data.monthlyAny,
+        monthlyDate: data.monthlyDate, dueDate: data.dueDate, shift: data.shift, optional: data.optional, assignTo: data.assignTo });
+      window.scrollTo(0, 0);
+      setTimeout(() => { const f = $('#f_title'); if (f) f.focus(); }, 50);
+      toast('Saving “' + data.title.trim() + '”. Add the next one.');
+    } else {
+      pop();
+      toast('Saving…');
+    }
+    queueSave(() => api('saveTask', data), 'Task saved ✅', before);
   },
   async deleteTask(el) {
     if (!(await confirmBox('Delete this task? Its past history stays in the TaskLog sheet.'))) return;
-    el.disabled = true;
-    try { S.tasksData = await api('deleteTask', { id: el.dataset.id }); toast('Task deleted'); pop(); } catch (e) { el.disabled = false; fail(e); }
+    const before = S.tasksData.tasks.slice();
+    S.tasksData.tasks = before.filter(t => t.id !== el.dataset.id);
+    pop();
+    queueSave(() => api('deleteTask', { id: el.dataset.id }), 'Task deleted', before);
   },
   async review(el) {
     const ok = el.dataset.ok === '1';
