@@ -867,7 +867,7 @@ function renderToday() {
     html += `<div class="section-title">${label}<span class="by">· ${sub}</span><span class="count">${d}/${list.length}</span></div>
       <div class="section">${list.map(([it, idx]) => itemRow(it, idx)).join('')}</div>`;
   });
-  html += '<div class="section-foot">Tap the circle to mark done. Swipe right for done, left for in progress.</div>';
+  html += '<div class="section-foot">Tap the circle to mark done. Weekly, monthly and one-time tasks: first tap is in progress, second tap is done. Swipe right for done, left for in progress.</div>';
   app.innerHTML = html;
 }
 // Checklist helpers: optional items (e.g. surprise checks) never block completion
@@ -895,11 +895,14 @@ async function toggleItem(idx) {
   const it = S.items[idx];
   if (!it) return;
   if (isOpen(it) && reqLeft(it)) return openItemSheet(it);
-  const next = isOpen(it) ? 'Done' : 'Pending';
+  // Daily tasks: one tap = done. Weekly, monthly and one-time tasks take longer, so the first tap
+  // marks them in progress and the next tap marks them done.
+  const next = !isOpen(it) ? 'Pending' : (it.category !== 'Daily' && it.status === 'Pending') ? 'In progress' : 'Done';
   queueItemChange(it, { status: next });
   if (next === 'Done') haptic('success'); else tap();
   renderToday();
   if (next === 'Done') undoToast(it.taskId, it.dueDate, it.doneLate ? 'Done (late)' : 'Marked as done');
+  else if (next === 'In progress') toast('In progress. Tap again when it is done.');
   else toast('Marked as not done');
 }
 function openItemSheet(it) { tap(); push(sheetView(() => renderItem(it.taskId, it.dueDate))); }
@@ -962,11 +965,9 @@ function renderItem(taskId, due) {
   }
   html += `<div class="section-title">Note</div><div class="section"><div class="field"><textarea id="remarks" maxlength="500" placeholder="What's done so far, or anything to flag">${esc(it.remarks)}</textarea></div></div>
     <button class="btn secondary" data-act="saveRemarks">Save note</button>`;
-  if (!hasMain && isOpen(it) && !left) html += '<button class="btn" data-act="setStatus" data-status="Done">Mark as done</button>';
   showSheet(html);
   S.detail = { taskId, due };
-  if (isOpen(it) && !left) setMain(it.late ? 'Mark as done (late)' : 'Mark as done', () => detailChange({ status: 'Done', remarks: $('#remarks') ? $('#remarks').value : undefined }, 'Task done'));
-  else hideMain();
+  hideMain();
 }
 /** Detail-screen change: applied on screen at once and sent in the background (never waits). */
 function detailChange(changes, okMsg) {
