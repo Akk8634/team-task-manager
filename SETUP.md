@@ -11,7 +11,8 @@ A task manager that runs entirely inside Telegram.
 
 | File | What it is |
 |---|---|
-| `index.html` | The Mini App screen, hosted on GitHub Pages |
+| `index.html` | The Mini App screen, hosted on Netlify |
+| `netlify.toml` | Netlify settings (no build step) |
 | `backend/Code.gs` | The backend: API, bot and scheduled reminders |
 | `backend/appsscript.json` | Apps Script project settings (IST timezone, web app access) |
 
@@ -23,15 +24,20 @@ A task manager that runs entirely inside Telegram.
 2. Give it a name (e.g. *Cityflo Tasks*), then a username that ends in `bot` (e.g. `cityflo_tasks_bot`).
 3. Copy the **token** BotFather gives you (e.g. `123456789:ABC...`). Keep it private.
 
-## Step 2: The Mini App URL (GitHub Pages)
+## Step 2: Host the Mini App on Netlify (5 min)
 
-The Mini App is already published with GitHub Pages at:
+The Mini App (`index.html`) must be available at a public HTTPS address. Netlify hosts it for free and redeploys automatically on every push to GitHub.
 
-**`https://akk8634.github.io/team-task-manager/`**
+1. Go to **https://app.netlify.com/signup** and choose **Sign up with GitHub** (use the `Akk8634` account).
+2. Click **Add new site → Import an existing project → GitHub**, and allow Netlify to access the **`team-task-manager`** repository.
+3. Leave all settings as they are (`netlify.toml` in the repo already sets them) and click **Deploy**.
+4. When it finishes, Netlify shows your site URL, e.g. `https://team-task-manager-abc123.netlify.app`.
+   - Optional: **Site configuration → Change site name** gives a nicer URL, e.g. `https://cityflo-tasks.netlify.app`.
+5. Open the URL in a browser. You should see **"Open in Telegram"**, which means it works. The app itself only runs inside Telegram.
+
+Use this URL as `MINI_APP_URL` in Step 5.
 
 > `index.html` contains no secrets. The backend address is passed to it at runtime by the bot.
-
-To host it elsewhere, put `index.html` in any GitHub repository and turn on **Settings → Pages → Deploy from a branch → main → / (root)**.
 
 ## Step 3: Create the Google Sheet and Apps Script project
 
@@ -60,7 +66,7 @@ To host it elsewhere, put `index.html` in any GitHub repository and turn on **Se
    const CONFIG = {
      BOT_TOKEN: '123456789:ABC...',                                // Step 1
      WEB_APP_URL: 'https://script.google.com/macros/s/.../exec',   // Step 4
-     MINI_APP_URL: 'https://akk8634.github.io/team-task-manager/', // Step 2
+     MINI_APP_URL: 'https://<your-site>.netlify.app/',             // Step 2
    };
    ```
 2. 💾 Save, select the **`setup`** function in the dropdown at the top, and click **Run**.
@@ -154,7 +160,7 @@ The bot token and other settings are kept in Apps Script's Script Properties, no
 ## Updating the code later
 
 - **Backend (`Code.gs`):** after editing, go to **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**. The URL stays the same. Run `setup` again if you changed CONFIG.
-- **Mini App (`index.html`):** push the new file to GitHub. Pages updates within a minute.
+- **Mini App (`index.html`):** push the new file to GitHub. Netlify redeploys within a minute.
 
 ## Troubleshooting
 

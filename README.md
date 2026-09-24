@@ -10,7 +10,8 @@ A team task manager that runs inside Telegram: a **Mini App** for daily, weekly,
 
 | Path | Purpose |
 |---|---|
-| `index.html` | Telegram Mini App (served by GitHub Pages) |
+| `index.html` | Telegram Mini App (hosted on Netlify) |
+| `netlify.toml` | Netlify settings |
 | `backend/Code.gs` | Google Apps Script backend: API, bot webhook, scheduled reminders |
 | `backend/appsscript.json` | Apps Script manifest |
 
