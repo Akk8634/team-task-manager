@@ -341,9 +341,22 @@ function handleBoot(b) {
   S.today = b.today;
   S.cfg = b.settings;
   S.tab = b.user.getsTasks || !isAdmin() ? 'today' : 'team';
+  // The backend sends the first screens' data with bootstrap (one request to open the app).
+  // Older backends don't, so fall back to fetching it separately.
+  const now = Date.now();
+  if (b.myDay) Object.assign(S, { items: b.myDay.items, today: b.myDay.today, cfg: b.myDay.settings, week: b.myDay.week, month: b.myDay.month, todayAt: now });
+  if (b.upcoming) Object.assign(S, { upcoming: b.upcoming, upcomingAt: now });
+  if (b.admin) {
+    S.serverTasks = { tasks: b.admin.tasks.tasks, members: b.admin.tasks.members };
+    S.acceptedSeq = ++S.seq;
+    applyDrafts();
+    S.team = b.admin.team;
+    S.settings = b.admin.settings;
+    S.manageAt = { tasksData: now, team: now, settings: now };
+  }
   openTab();
-  setTimeout(prefetchUpcoming, 600);
-  if (isAdmin()) setTimeout(prefetchAdmin, 800);
+  if (!b.upcoming) setTimeout(prefetchUpcoming, 600);
+  if (isAdmin() && !b.admin) setTimeout(prefetchAdmin, 800);
 }
 // Load admin screens in the background so switching tabs doesn't wait on the server
 function prefetchAdmin() {
@@ -590,7 +603,7 @@ function renderDashboard() {
   const m = d.members.slice().sort((a, b) => (b.late + b.missed) - (a.late + a.missed) || b.pending - a.pending || a.name.localeCompare(b.name));
   const sum = k => m.reduce((a, x) => a + x[k], 0);
   let html = `<div class="page-head"><h1>Team</h1></div>
-    <div class="section"><div class="field"><label>Date</label><input type="date" id="dashDay" value="${d.day}" max="${d.today}"></div></div>
+    <div class="section"><div class="field"><label>Date${d.minDay ? ' (last 60 days; older history is in the TaskLog Archive sheet)' : ''}</label><input type="date" id="dashDay" value="${d.day}" max="${d.today}" ${d.minDay ? `min="${d.minDay}"` : ''}></div></div>
     <div class="stats"><div class="stat"><b style="color:var(--ok)">${sum('done') - sum('doneLate')}</b><span>Done on time</span></div>
     <div class="stat"><b style="color:var(--warn)">${sum('late') + sum('doneLate')}</b><span>Late</span></div>
     <div class="stat"><b style="color:var(--danger)">${d.isPast ? sum('missed') : sum('pending')}</b><span>${d.isPast ? 'Missed' : 'Pending'}</span></div></div>
@@ -622,8 +635,11 @@ async function loadManage() {
   const [key, action] = MANAGE_DATA[S.manageTab];
   const tabNow = S.manageTab;
   if (S[key]) renderManage(); else loading();
+  S.manageAt = S.manageAt || {};
+  if (S[key] && Date.now() - (S.manageAt[key] || 0) < 60000) return; // loaded moments ago
   try {
     if (key === 'tasksData') await fetchTasks(); else S[key] = await api(action);
+    S.manageAt[key] = Date.now();
     // Re-render only if the admin is still on the same list (never while they are editing settings)
     if (S.tab === 'manage' && !S.stack.length && S.manageTab === tabNow && tabNow !== 'settings') renderManage();
     else if (S.tab === 'manage' && !S.stack.length && S.manageTab === tabNow && !app.querySelector('#s_m')) renderManage();

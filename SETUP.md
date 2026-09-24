@@ -152,7 +152,8 @@ Change the 4 reminder times in **Manage → Settings**. They go out within 5 min
 ## Data in the Google Sheet
 
 - **`Tasks`:** all task settings
-- **`TaskLog`:** one row per member, per task, per period: status (Done / N/A / Pending), ticked checklist items, remarks and completion time. This is your history and report.
+- **`TaskLog`:** one row per member, per task, per period: status (Done / N/A / Pending), ticked checklist items, remarks and completion time. This is your history and report for the **last 60 days**.
+- **`TaskLog Archive`:** created automatically. Every night after 3 AM, TaskLog rows older than 60 days move here (same columns, nothing is deleted), so the app stays fast as history grows. Rows of one-time tasks stay in TaskLog. Use this tab (filters or **File → Download**) for older months and last year's data. The app's Team tab shows the last 60 days.
 - **`Team`:** Telegram ID, name, role (Admin / Member) and status (Active / Pending / Rejected)
 
 The bot token and other settings are kept in Apps Script's Script Properties, not in the Sheet.

@@ -13,6 +13,9 @@ const CONFIG = {
 
 const SHEET_TASKS = 'Tasks';
 const SHEET_LOG = 'TaskLog';
+const SHEET_ARCHIVE = 'TaskLog Archive';
+const ARCHIVE_AFTER_DAYS = 60;  // TaskLog keeps the last 60 days; older rows move to the archive sheet
+const ARCHIVE_AT = '03:00';     // daily archive runs with the first reminder check after this time
 const SHEET_TEAM = 'Team';
 
 const HEADERS = {
@@ -199,12 +202,19 @@ function apiBootstrap_(ctx) {
   }
   if (m.status === 'Pending') return { state: 'pending', name: m.name };
   if (m.status === 'Rejected') return { state: 'rejected' };
-  return {
+  // Everything the first screens need comes in this one request, so opening the app costs a single
+  // Apps Script execution (important when the whole team opens it at 8 AM). Sheets are read once (MEMO_).
+  const ctxM = { member: m };
+  const out = {
     state: 'active',
     user: { id: m.id, name: m.name, role: m.role, getsTasks: m.getsTasks },
     today: todayStr_(),
     settings: publicSettings_(),
+    myDay: apiMyDay_(ctxM),
+    upcoming: apiUpcoming_(ctxM),
   };
+  if (m.role === 'Admin') out.admin = { tasks: apiListTasks_(), team: apiListTeam_(), settings: apiGetSettings_() };
+  return out;
 }
 
 function apiClaimAdmin_(ctx, args) {
@@ -254,14 +264,16 @@ function apiUpdateItem_(ctx, args) {
 
 function apiDashboard_(ctx, args) {
   const today = todayStr_();
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(args.day || '') && args.day <= today ? args.day : today;
+  const minDay = addDays_(today, -ARCHIVE_AFTER_DAYS); // older days live in the TaskLog Archive sheet
+  let day = /^\d{4}-\d{2}-\d{2}$/.test(args.day || '') && args.day <= today ? args.day : today;
+  if (day < minDay) day = minDay;
   const tasks = getTasks_();
   const logMap = getLogMap_();
   const members = getTeam_().filter(m => m.status === 'Active').map(m => {
     const items = sortItems_(memberItems_(m, day, tasks, logMap));
     return Object.assign({ id: m.id, name: m.name, items }, countItems_(items, day));
   }).filter(m => m.items.length);
-  return { day, today, isPast: day < today, members, activeTasks: tasks.filter(t => t.active).length };
+  return { day, today, minDay, isPast: day < today, members, activeTasks: tasks.filter(t => t.active).length };
 }
 
 function apiListTasks_() {
@@ -684,6 +696,56 @@ function tick() {
     lock.releaseLock();
   }
   if (events.length) dispatch_(events, getTasks_());
+
+  // Once a day, after 3 AM, move old TaskLog rows to the archive so the app stays fast
+  const today = todayStr_();
+  if (p.getProperty('LAST_ARCHIVE') !== today && nowHM_() >= ARCHIVE_AT) {
+    p.setProperty('LAST_ARCHIVE', today);
+    try { archiveOldLogs_(); } catch (err) { console.error('Archive failed: ' + (err && err.stack || err)); }
+  }
+}
+
+/**
+ * Moves TaskLog rows older than ARCHIVE_AFTER_DAYS to the "TaskLog Archive" sheet (same columns).
+ * Nothing is deleted. Rows of One-time tasks stay, because a one-time task stays open until done.
+ * Periods that old are closed, so the app never needs these rows again. Returns the number moved.
+ */
+function archiveOldLogs_() {
+  return withLock_(() => {
+    const ss = ss_();
+    const log = sheet_(SHEET_LOG);
+    const last = log.getLastRow();
+    if (last < 2) return 0;
+    const width = HEADERS[SHEET_LOG].length;
+    const values = log.getRange(2, 1, last - 1, width).getValues();
+    const cutoff = addDays_(todayStr_(), -ARCHIVE_AFTER_DAYS);
+    const oneTime = {};
+    getTasks_().forEach(t => { if (t.category === 'One-time') oneTime[t.id] = true; });
+    const dateCol = HEADERS[SHEET_LOG].indexOf('Date');
+    const taskCol = HEADERS[SHEET_LOG].indexOf('Task ID');
+    const keep = [];
+    const move = [];
+    values.forEach(r => {
+      if (r.every(v => v === '')) return;
+      const old = str_(r[dateCol]) < cutoff && !oneTime[str_(r[taskCol])];
+      (old ? move : keep).push(r.map(v => (v instanceof Date ? dtCell_(v) : v)));
+    });
+    if (!move.length) return 0;
+
+    let arch = ss.getSheetByName(SHEET_ARCHIVE);
+    if (!arch) {
+      arch = ss.insertSheet(SHEET_ARCHIVE);
+      arch.getRange(1, 1, 1, width).setValues([HEADERS[SHEET_LOG]]).setFontWeight('bold').setBackground('#eeeeee');
+      arch.setFrozenRows(1);
+    }
+    appendRows_(SHEET_ARCHIVE, move);
+    // Rewrite TaskLog with only the rows we keep (one write instead of deleting rows one by one)
+    log.getRange(2, 1, last - 1, width).clearContent();
+    if (keep.length) log.getRange(2, 1, keep.length, width).setNumberFormat('@').setValues(keep.map(r => r.map(v => String(v))));
+    delete MEMO_.rows[SHEET_LOG];
+    console.log(`Archived ${move.length} TaskLog rows older than ${cutoff}; ${keep.length} kept.`);
+    return move.length;
+  });
 }
 
 /** Sends one combined message per member for the given reminder slots. Returns the number of messages sent. */
@@ -1010,6 +1072,8 @@ function memberItems_(member, dayStr, tasks, logMap) {
     if (!due) return;
     const entry = logMap[key_(t.id, member.id, due)];
     const status = entry ? entry.status : 'Pending';
+    // A one-time task has no next occurrence: once finished, show it only on the day it was finished
+    if (t.category === 'One-time' && status !== 'Pending' && entry.updatedAt && entry.updatedAt.slice(0, 10) < dayStr) return;
     const pending = status === 'Pending';
     const deadline = deadlineFor_(t, due, s);
     const flexible = isFlexible_(t);
@@ -1242,6 +1306,7 @@ function fmtDate_(d) { return Utilities.formatDate(d, tz_(), 'yyyy-MM-dd'); }
 function dtStr_(d) { return Utilities.formatDate(d, tz_(), 'yyyy-MM-dd HH:mm'); }
 function nowStr_() { return dtStr_(new Date()); }
 function todayStr_() { return fmtDate_(new Date()); }
+function nowHM_() { return Utilities.formatDate(new Date(), tz_(), 'HH:mm'); }
 // Noon keeps the calendar date stable regardless of timezone offsets
 function parseDate_(s) { const p = String(s).split('-').map(Number); return new Date(p[0], p[1] - 1, p[2], 12); }
 function addDays_(s, n) { const d = parseDate_(s); d.setDate(d.getDate() + n); return fmtDate_(d); }
