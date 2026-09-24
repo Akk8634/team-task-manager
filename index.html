@@ -37,7 +37,16 @@
 
   .page-head { padding: 18px 16px 6px; display: flex; align-items: flex-end; gap: 8px; }
   .page-head h1 { font-size: 26px; margin: 0; flex: 1; letter-spacing: -.02em; }
-  .fallback-back { background: none; border: 0; color: var(--link); padding: 12px 16px 0; font-size: 16px; cursor: pointer; }
+  .topbar { position: sticky; top: 0; z-index: 9; background: var(--bg); padding: 8px 8px 0; }
+  .back-btn { display: inline-flex; align-items: center; gap: 2px; background: var(--card); border: 0; border-radius: 99px; color: var(--link); padding: 7px 14px 7px 10px; font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+  .back-btn span { font-size: 22px; line-height: 16px; margin-top: -2px; }
+  .toast button { background: none; border: 0; color: #8fd0ff; font-weight: 700; margin-left: 12px; padding: 0; font-size: 14px; cursor: pointer; }
+  .toast.has-action { pointer-events: auto; }
+  .ck-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+  .ck-row input { flex: 1; min-width: 0; border-bottom: 1px solid var(--sep) !important; padding: 6px 0 !important; }
+  .ck-opt { border: 0; border-radius: 7px; padding: 5px 9px; font-size: 12px; font-weight: 600; background: var(--soft); color: var(--sub); cursor: pointer; white-space: nowrap; }
+  .ck-opt.on { background: rgba(240, 154, 55, .18); color: var(--warn); }
+  .ck-del { border: 0; background: none; color: var(--danger); font-size: 20px; cursor: pointer; padding: 0 4px; }
 
   .hero { background: var(--card); margin: 8px 12px 4px; border-radius: 14px; padding: 16px; }
   .hero-top { display: flex; align-items: center; gap: 12px; }
@@ -185,12 +194,33 @@ async function api(action, args) {
   return j.data;
 }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-function toast(msg, isError) {
+/** Short message at the bottom. `action` ({label, fn}) adds a button, e.g. Undo. */
+function toast(msg, isError, action) {
   const t = $('#toast');
   t.textContent = msg;
-  t.className = 'toast show' + (isError ? ' error' : '');
+  t.className = 'toast show' + (isError ? ' error' : '') + (action ? ' has-action' : '');
+  if (action) {
+    const b = document.createElement('button');
+    b.textContent = action.label;
+    b.onclick = () => { t.className = 'toast'; action.fn(); };
+    t.appendChild(b);
+  }
   clearTimeout(t._h);
-  t._h = setTimeout(() => { t.className = 'toast'; }, isError ? 4000 : 2000);
+  t._h = setTimeout(() => { t.className = 'toast'; }, isError ? 4000 : action ? 5000 : 2000);
+}
+function undoToast(taskId, dueDate, msg) {
+  toast(msg || 'Marked as done', false, {
+    label: 'UNDO',
+    fn: async () => {
+      const it = findItem(taskId, dueDate);
+      if (!it) return;
+      try { await saveItem(it, { status: 'Pending' }); tap(); toast('Undone: task is pending again'); refreshView(); } catch (e) { fail(e); }
+    },
+  });
+}
+function refreshView() {
+  const top = S.stack[S.stack.length - 1];
+  if (top) top(); else if (S.tab === 'today') renderToday();
 }
 function fail(e) { haptic('error'); toast((e && e.message) || String(e), true); }
 function haptic(type) { try { tg.HapticFeedback.notificationOccurred(type); } catch (e) { /* not in Telegram */ } }
@@ -237,7 +267,8 @@ function pop() {
   const top = S.stack[S.stack.length - 1];
   if (top) top(); else renderCurrentTab();
 }
-function backLink() { return hasNativeBack ? '' : '<button class="fallback-back" data-act="back">‹ Back</button>'; }
+// Always shown on inner screens: some Telegram clients hide or don't show the header back button clearly
+function backLink() { return '<div class="topbar"><button class="back-btn" data-act="back"><span>‹</span> Back</button></div>'; }
 function openTab() {
   syncBack();
   renderTabs();
@@ -359,12 +390,15 @@ function renderToday() {
   if (items.some(i => i.optional)) html += '<div class="section-foot">“If applicable” tasks don’t count as pending. Mark them done when they happen.</div>';
   app.innerHTML = html;
 }
+// Checklist helpers: optional items (e.g. surprise checks) never block completion
+function reqItems(it) { return it.checklist.map((c, i) => (c.optional ? -1 : i)).filter(i => i >= 0); }
+function reqLeft(it) { return reqItems(it).filter(i => !it.checked.includes(i)).length; }
 function itemRow(it, idx) {
-  const n = it.checklist.length;
+  const req = reqItems(it);
   const meta = [];
   if (it.time) meta.push(`<span>🕘 ${fmt12(it.time)}</span>`);
   if (it.category !== 'Daily') meta.push(`<span class="tag">${esc(it.category)}</span>`);
-  if (n) meta.push(`<span>☑ ${it.checked.length}/${n}</span>`);
+  if (req.length) meta.push(`<span>☑ ${req.length - reqLeft(it)}/${req.length}</span>`);
   meta.push(...statusTags(it));
   if (it.status === 'Pending' && !it.flexible && it.dueDate < S.today) meta.push(`<span>Due ${fmtShort(it.dueDate)}</span>`);
   if (it.status === 'Done' && it.updatedAt) meta.push(`<span>✓ ${timeOf(it.updatedAt)}${it.updatedAt.slice(0, 10) !== S.today ? ', ' + fmtShort(it.updatedAt.slice(0, 10)) : ''}</span>`);
@@ -378,14 +412,19 @@ function itemRow(it, idx) {
 async function toggleItem(idx) {
   const it = S.items[idx];
   if (!it) return;
-  if (it.status === 'Pending' && it.checklist.length && it.checked.length < it.checklist.length) return push(() => renderItem(it.taskId, it.dueDate));
+  if (it.status === 'Pending' && reqLeft(it)) return push(() => renderItem(it.taskId, it.dueDate));
   const next = it.status === 'Pending' ? 'Done' : 'Pending';
   const before = Object.assign({}, it);
   Object.assign(it, { status: next, updatedAt: next === 'Done' ? nowStamp() : '' });
-  if (next === 'Pending' && it.checklist.length) it.checked = [];
+  if (next === 'Pending') it.checked = [];
   if (next === 'Done') haptic('success'); else tap();
   renderToday();
-  try { await saveItem(it, { status: next }); if (S.tab === 'today' && !S.stack.length) renderToday(); } catch (e) { Object.assign(it, before); renderToday(); fail(e); }
+  try {
+    const res = await saveItem(it, { status: next });
+    if (S.tab === 'today' && !S.stack.length) renderToday();
+    if (next === 'Done') undoToast(res.taskId, res.dueDate, res.doneLate ? 'Done (late) 🟠' : 'Marked as done ✅');
+    else toast(res.late ? 'Marked as not done. It is now in Late.' : 'Marked as not done');
+  } catch (e) { Object.assign(it, before); renderToday(); fail(e); }
 }
 function nowStamp() { const d = new Date(); return S.today + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
 async function saveItem(it, changes) {
@@ -401,6 +440,8 @@ function renderItem(taskId, due) {
   const it = findItem(taskId, due);
   if (!it) return pop();
   const n = it.checklist.length;
+  const req = reqItems(it);
+  const left = reqLeft(it);
   const tags = [`<span class="tag blue">${esc(it.category)}</span>`];
   if (it.shift !== 'General' && !it.flexible) tags.push(`<span class="tag">${esc(it.shift)} shift</span>`);
   if (it.optional) tags.push('<span class="tag orange">If applicable</span>');
@@ -415,21 +456,25 @@ function renderItem(taskId, due) {
     ${it.time ? `<div class="row"><div class="body">Time</div><div class="value">${fmt12(it.time)}</div></div>` : ''}
     ${it.status === 'Done' && it.updatedAt ? `<div class="row"><div class="body">Completed</div><div class="value">${it.updatedAt.slice(0, 10) === S.today ? 'Today' : fmtFull(it.updatedAt.slice(0, 10))}, ${timeOf(it.updatedAt)}</div></div>` : ''}
   </div>`;
+  // Status actions come first so "undo" is always visible without scrolling
+  if (it.status === 'Pending') {
+    if (!req.length) html += `<button class="btn" data-act="setStatus" data-status="Done" style="margin-top:16px">${it.late ? 'Mark as done (late)' : 'Mark as done'}</button>`;
+    if (it.optional) html += '<button class="btn secondary" data-act="setStatus" data-status="N/A">Not applicable</button>';
+  } else {
+    html += `<button class="btn danger" data-act="setStatus" data-status="Pending" style="margin-top:16px">↩️ ${it.status === 'Done' ? 'Undo: mark as not done' : 'Undo N/A'}</button>`;
+  }
   if (n) {
-    html += `<div class="section-title">Checklist<span class="count">${it.checked.length}/${n}</span></div><div class="section">` +
+    html += `<div class="section-title">Checklist${req.length ? `<span class="count">${req.length - left}/${req.length} required</span>` : ''}</div><div class="section">` +
       it.checklist.map((c, ci) => {
         const on = it.checked.includes(ci);
-        return `<div class="row indent tap ${on ? 'item-done' : ''}" data-act="checkItem" data-ci="${ci}"><span class="check square ${on ? 'done' : ''}">${CHECK_SVG}</span><div class="body"><div class="title">${esc(c)}</div></div></div>`;
-      }).join('') + '</div><div class="section-foot">The task is marked done when every item is ticked.</div>';
+        return `<div class="row indent tap ${on ? 'item-done' : ''}" data-act="checkItem" data-ci="${ci}"><span class="check square ${on ? 'done' : ''}">${CHECK_SVG}</span>
+          <div class="body"><div class="title">${esc(c.text)}</div></div>${c.optional ? '<span class="tag orange">Optional</span>' : ''}</div>`;
+      }).join('') + `</div><div class="section-foot">${req.length
+        ? 'The task is done when every required item is ticked. Optional items (e.g. surprise checks) can be ticked when they happen.'
+        : 'All items are optional. Tick what you checked, then mark the task as done.'}</div>`;
   }
   html += `<div class="section-title">Remarks</div><div class="section"><div class="field"><textarea id="remarks" maxlength="500" placeholder="Add a note (optional)">${esc(it.remarks)}</textarea></div></div>
     <button class="btn secondary" data-act="saveRemarks">Save remark</button>`;
-  if (it.status === 'Pending') {
-    if (!n) html += `<button class="btn" data-act="setStatus" data-status="Done">${it.late ? 'Mark as done (late)' : 'Mark as done'}</button>`;
-    if (it.optional) html += '<button class="btn secondary" data-act="setStatus" data-status="N/A">Not applicable</button>';
-  } else {
-    html += `<button class="btn danger" data-act="setStatus" data-status="Pending">${it.status === 'Done' ? 'Mark as not done' : 'Undo N/A'}</button>`;
-  }
   app.innerHTML = html;
   S.detail = { taskId, due };
 }
@@ -439,8 +484,10 @@ async function detailChange(changes, okMsg, btn) {
   if (btn) btn.disabled = true;
   try {
     const res = await saveItem(findItem(taskId, due), changes);
-    if (res.status === 'Done' && !wasDone) { haptic('success'); if (res.doneLate) okMsg = 'Done (late) 🟠'; }
-    if (okMsg) toast(okMsg);
+    const justDone = res.status === 'Done' && !wasDone;
+    if (justDone) haptic('success');
+    if (justDone) undoToast(taskId, due, res.doneLate ? 'Done (late) 🟠' : okMsg || 'Marked as done ✅');
+    else if (okMsg) toast(okMsg);
     if (changes.status && changes.status !== 'Pending') { pop(); return true; }
     renderItem(taskId, due);
     return true;
@@ -537,7 +584,7 @@ function tasksHtml() {
     html += `<div class="section-title">${s === 'General' ? 'General' : s + ' shift'}<span class="count">${l.length}</span></div><div class="section">` + l.map(t => {
       const assigned = t.assignTo === 'All' ? 'All members' : t.assignTo.length + ' member' + (t.assignTo.length === 1 ? '' : 's');
       return `<div class="row tap" data-act="editTask" data-id="${esc(t.id)}"><div class="body"><div class="title" style="${t.active ? '' : 'color:var(--hint)'}">${esc(t.title)}</div>
-        <div class="meta"><span>${esc(t.schedule)}</span>${t.time ? `<span>🕘 ${fmt12(t.time)}</span>` : ''}<span>👥 ${assigned}</span>${t.optional ? '<span class="tag orange">If applicable</span>' : ''}${t.checklist.length ? `<span>☑ ${t.checklist.length}</span>` : ''}${t.active ? '' : '<span class="tag">Inactive</span>'}</div></div><span class="chev">›</span></div>`;
+        <div class="meta"><span>${esc(t.schedule)}</span>${t.time ? `<span>🕘 ${fmt12(t.time)}</span>` : ''}<span>👥 ${assigned}</span>${t.optional ? '<span class="tag orange">If applicable</span>' : ''}${t.checklist.length ? `<span>☑ ${t.checklist.length}${t.checklist.some(c => c.optional) ? ` (${t.checklist.filter(c => c.optional).length} optional)` : ''}</span>` : ''}${t.active ? '' : '<span class="tag">Inactive</span>'}</div></div><span class="chev">›</span></div>`;
     }).join('') + '</div>';
   });
   return html;
@@ -608,8 +655,10 @@ function renderTaskEditor(id) {
     <div class="section-title">Options</div><div class="section">
       <div class="row"><div class="body"><div class="title">If applicable</div><div class="meta">Only when it happens (e.g. incidents). Not counted as pending, no reminders.</div></div><label class="switch"><input type="checkbox" id="f_opt" ${t.optional ? 'checked' : ''}><span></span></label></div>
       <div class="row"><div class="body"><div class="title">Active</div><div class="meta">Inactive tasks are hidden and get no reminders.</div></div><label class="switch"><input type="checkbox" id="f_active" ${t.active ? 'checked' : ''}><span></span></label></div>
-      <div class="field"><label>Checklist (one item per line, optional)</label><textarea id="f_check" placeholder="RC&#10;Permit&#10;Road Tax&#10;Fitness Certificate">${esc(t.checklist.join('\n'))}</textarea></div>
     </div>
+    <div class="section-title">Checklist (optional)</div><div class="section"><div class="field" id="f_check">${t.checklist.map(ckRow).join('')}
+      <button type="button" class="link-btn" data-act="addCheck" style="padding:8px 0">＋ Add item</button></div></div>
+    <div class="section-foot">Tap <b>Required</b> to switch an item to <b>Optional</b> (e.g. a surprise breathalyzer check). Optional items never block the task from being done.</div>
     <div class="section-title">Assign to</div>
     <div class="seg" style="margin-top:0"><button type="button" data-act="assignMode" data-k="All" class="${S.editAssign === 'All' ? 'on' : ''}">All members</button><button type="button" data-act="assignMode" data-k="Some" class="${S.editAssign === 'All' ? '' : 'on'}">Selected</button></div>
     <div class="section ${S.editAssign === 'All' ? 'hide' : ''}" id="f_members" style="margin-top:10px">${members.map(m => `<div class="row tap indent" data-act="pickMember" data-id="${esc(m.id)}"><span class="check square ${sel.includes(m.id) ? 'done' : ''}">${CHECK_SVG}</span><div class="body"><div class="title">${esc(m.name)}</div></div></div>`).join('') || '<div class="empty">No members yet</div>'}</div>
@@ -628,6 +677,12 @@ function renderTaskEditor(id) {
   $('#f_cat').onchange = sync;
   sync();
 }
+function ckRow(c) {
+  c = c || { text: '', optional: false };
+  return `<div class="ck-row"><input maxlength="120" value="${esc(c.text)}" placeholder="e.g. RC, Permit, Breathalyzer">
+    <button type="button" class="ck-opt ${c.optional ? 'on' : ''}" data-act="ckOpt">${c.optional ? 'Optional' : 'Required'}</button>
+    <button type="button" class="ck-del" data-act="ckDel" aria-label="Remove item">×</button></div>`;
+}
 function collectTask(id) {
   return {
     id,
@@ -643,7 +698,7 @@ function collectTask(id) {
     time: $('#f_time').value,
     optional: $('#f_opt').checked,
     active: $('#f_active').checked,
-    checklist: $('#f_check').value.split('\n'),
+    checklist: [...document.querySelectorAll('#f_check .ck-row')].map(r => ({ text: r.querySelector('input').value, optional: r.querySelector('.ck-opt').classList.contains('on') })),
     assignTo: S.editAssign === 'All' ? 'All' : [...document.querySelectorAll('#f_members .check.done')].map(el => el.closest('[data-id]').dataset.id),
   };
 }
@@ -680,7 +735,7 @@ const ACTIONS = {
     tap();
     it.checked = checked; // optimistic
     renderItem(S.detail.taskId, S.detail.due);
-    detailChange({ checked }, checked.length === it.checklist.length ? 'All items ticked, task done ✅' : '')
+    detailChange({ checked }, reqItems(it).length && !reqLeft(it) ? 'All required items ticked, task done ✅' : '')
       .then(okd => { if (!okd) { it.checked = before; renderItem(S.detail.taskId, S.detail.due); } });
   },
   saveRemarks: el => detailChange({ remarks: $('#remarks').value }, 'Remark saved', el),
@@ -694,6 +749,9 @@ const ACTIONS = {
   newTask() { push(() => renderTaskEditor('')); },
   editTask(el) { const id = el.dataset.id; push(() => renderTaskEditor(id)); },
   day(el) { el.classList.toggle('on'); tap(); },
+  addCheck(el) { el.insertAdjacentHTML('beforebegin', ckRow()); el.previousElementSibling.querySelector('input').focus(); },
+  ckOpt(el) { const on = el.classList.toggle('on'); el.textContent = on ? 'Optional' : 'Required'; tap(); },
+  ckDel(el) { el.closest('.ck-row').remove(); tap(); },
   weekMode(el) {
     S.editWeek = el.dataset.k;
     el.parentNode.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === el));

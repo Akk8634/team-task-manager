@@ -276,8 +276,12 @@ function apiSaveTask_(ctx, input) {
     shift: SHIFTS.includes(input.shift) ? input.shift : 'General',
     time: '',
     type: input.optional ? 'If applicable' : 'Mandatory',
+    // Stored one item per line; optional items end with "(optional)" so the sheet stays readable
     checklist: (Array.isArray(input.checklist) ? input.checklist : String(input.checklist || '').split('\n'))
-      .map(s => String(s).trim()).filter(Boolean).slice(0, 30).join('\n'),
+      .map(c => (typeof c === 'object' && c ? c : parseChecklistItem_(String(c))))
+      .map(c => ({ text: String(c.text || '').trim().slice(0, 120), optional: !!c.optional }))
+      .filter(c => c.text).slice(0, 30)
+      .map(c => c.text + (c.optional ? ' (optional)' : '')).join('\n'),
     assignTo: 'All',
     active: input.active !== false,
   };
@@ -420,16 +424,19 @@ function updateItem_(member, taskId, dueDate, changes) {
     let checked = entry ? entry.checked.slice() : [];
     let remarks = entry ? entry.remarks : '';
     const n = task.checklist.length;
+    const required = requiredItems_(task);
+    const requiredDone = () => required.every(i => checked.includes(i));
 
     if (changes.checked) {
       checked = Array.from(new Set(changes.checked.map(Number).filter(i => Number.isInteger(i) && i >= 0 && i < n))).sort((a, b) => a - b);
-      if (status !== 'N/A') status = n && checked.length === n ? 'Done' : 'Pending';
+      // Ticking every required item completes the task; optional items (e.g. surprise checks) never block it
+      if (required.length && status !== 'N/A') status = requiredDone() ? 'Done' : 'Pending';
     }
     if (changes.status) {
       if (!STATUSES.includes(changes.status)) throw new Error('Invalid status.');
       if (changes.status === 'N/A' && !task.optional) throw new Error('Only "If applicable" tasks can be marked N/A.');
-      if (changes.status === 'Done' && n && checked.length < n) {
-        throw new Error('This task has a checklist. Please tick all items first.');
+      if (changes.status === 'Done' && !requiredDone()) {
+        throw new Error('This task has a checklist. Please tick all required items first.');
       }
       if (changes.status === 'Pending') checked = [];
       status = changes.status;
@@ -438,9 +445,10 @@ function updateItem_(member, taskId, dueDate, changes) {
 
     const updatedAt = nowStr_();
     const empty = status === 'Pending' && !checked.length && !remarks;
-    if (entry && empty) {
-      sheet_(SHEET_LOG).deleteRow(entry.row);
-    } else if (!empty) {
+    if (empty) {
+      if (entry) sheet_(SHEET_LOG).deleteRow(entry.row);
+      delete logMap[key_(taskId, member.id, dueDate)];
+    } else {
       // Keep the original completion time when only remarks/checklist change on a done task
       const stamp = entry && entry.status === status && status !== 'Pending' ? entry.updatedAt : updatedAt;
       const row = [entry ? entry.logId : 'L' + Date.now() + Math.floor(Math.random() * 1000), dueDate, taskId, task.title,
@@ -448,8 +456,6 @@ function updateItem_(member, taskId, dueDate, changes) {
       if (entry) writeRow_(SHEET_LOG, entry.row, row);
       else appendRow_(SHEET_LOG, row);
       logMap[key_(taskId, member.id, dueDate)] = { status, checked, remarks, updatedAt: stamp };
-    } else {
-      delete logMap[key_(taskId, member.id, dueDate)];
     }
     return memberItems_(member, today, [task], logMap)[0];
   });
@@ -531,18 +537,22 @@ function onCallback_(cq) {
   if (!member) return answerCallback_(cq.id, 'You do not have access.', true);
   const msg = cq.message;
 
-  if (parts[0] === 'd') {
+  if (parts[0] === 'd' || parts[0] === 'u') {
+    // d = mark done, u = undo (back to pending). The pressed button flips between the two.
+    const done = parts[0] === 'd';
     let item;
     try {
-      item = updateItem_(member, parts[1], parts[2], { status: 'Done' });
+      item = updateItem_(member, parts[1], parts[2], { status: done ? 'Done' : 'Pending' });
     } catch (err) {
       return answerCallback_(cq.id, err.message, true);
     }
-    answerCallback_(cq.id, item && item.doneLate ? 'Marked as done (late) 🟠' : 'Marked as done ✅');
+    answerCallback_(cq.id, !done ? 'Undone: task is pending again' : item && item.doneLate ? 'Marked as done (late) 🟠' : 'Marked as done ✅');
     if (msg && msg.reply_markup) {
-      const rows = msg.reply_markup.inline_keyboard
-        .map(r => r.filter(b => b.callback_data !== cq.data))
-        .filter(r => r.length);
+      const title = short_(item ? item.title : '', 24);
+      const flipped = done
+        ? { text: '↩️ Undo ' + title, callback_data: 'u|' + parts[1] + '|' + parts[2] }
+        : { text: '✅ ' + short_(item ? item.title : '', 28), callback_data: 'd|' + parts[1] + '|' + parts[2] };
+      const rows = msg.reply_markup.inline_keyboard.map(r => r.map(b => (b.callback_data === cq.data ? flipped : b)));
       tg_(token_(), 'editMessageReplyMarkup', { chat_id: msg.chat.id, message_id: msg.message_id, reply_markup: { inline_keyboard: rows } });
     }
     return;
@@ -660,7 +670,7 @@ function slotMessage_(m, ev, items, s) {
   const lines = [];
   const buttons = [];
   const addButtons = list => list.forEach(i => {
-    if (!i.checklist.length) buttons.push({ text: '✅ ' + short_(i.title, 28), callback_data: 'd|' + i.taskId + '|' + i.dueDate });
+    if (!i.checklist.some(c => !c.optional)) buttons.push({ text: '✅ ' + short_(i.title, 28), callback_data: 'd|' + i.taskId + '|' + i.dueDate });
   });
   const section = (title, list, opts) => {
     if (!list.length) return;
@@ -900,6 +910,16 @@ function monthlyDue_(y, m, date) {
   return new Date(y, m, Math.min(date, last), 12);
 }
 
+function parseChecklistItem_(line) {
+  const m = String(line).trim().match(/^(.*?)\s*\((optional|surprise)\)$/i);
+  return m ? { text: m[1].trim(), optional: true } : { text: String(line).trim(), optional: false };
+}
+
+/** Indexes of checklist items that must be ticked before the task counts as done. */
+function requiredItems_(task) {
+  return task.checklist.map((c, i) => (c.optional ? -1 : i)).filter(i => i >= 0);
+}
+
 function isAssigned_(task, member) {
   if (!member || member.status !== 'Active') return false;
   return task.assignAll ? member.getsTasks : task.assignIds.includes(member.id);
@@ -1021,7 +1041,7 @@ function getTasks_() {
       shift: SHIFTS.includes(str_(r['Shift'])) ? str_(r['Shift']) : 'General',
       time: timeCell_(r['Time']),
       optional: str_(r['Type']).toLowerCase() === 'if applicable',
-      checklist: str_(r['Checklist']).split('\n').map(s => s.trim()).filter(Boolean),
+      checklist: str_(r['Checklist']).split('\n').map(parseChecklistItem_).filter(c => c.text),
       assignAll: !assign || assign.toLowerCase() === 'all',
       assignIds: assign.split(',').map(s => s.trim()).filter(Boolean),
       active: str_(r['Active']).toLowerCase() !== 'no',

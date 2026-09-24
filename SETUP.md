@@ -92,7 +92,7 @@ In the Mini App, go to **Manage → Tasks → ＋ New task**:
 | Shift | **Morning** (due by the afternoon time, 2 PM) · **Evening** / **General** (due by end of day) |
 | Time | Optional label shown on the task, e.g. a meeting at 11:30 AM. No separate reminder. |
 | If applicable | For tasks that only happen sometimes (incidents, breakdowns). Not counted as pending, no reminders. Members mark them Done or N/A. |
-| Checklist | Optional sub-items, one per line. The task is done when all items are ticked. |
+| Checklist | Optional sub-items. Each item is **Required** or **Optional** (e.g. a surprise breathalyzer check). The task is done when every required item is ticked; optional items never block it. In the sheet, optional items end with `(optional)`. |
 | Assign to | All members, or selected people only |
 | Active | Turn off to pause a task without deleting it |
 
@@ -109,6 +109,8 @@ Test the reminders from **Manage → Settings → Send now**.
 | Weekly, any day | **Sunday night** (week = Mon–Sun) | **Missed** |
 | Monthly, any time | **Last day of the month** | **Missed** |
 | Weekly/Monthly fixed day, One-time | That day (2 PM for Morning shift, midnight otherwise) | **Late** until the next occurrence, then **Missed**. One-time tasks stay Late until done. |
+
+**Marked done by mistake?** Tap **UNDO** in the message at the bottom of the app, tap the task's circle again, or open the task and tap **↩️ Undo: mark as not done**. In the bot, the ✅ button turns into **↩️ Undo** after you press it. A task can be undone until its period closes.
 
 A task finished after its deadline (but before it closes) is shown as **Done late** 🟠. Members see Late items in red at the top of their list, and admins see on-time, late and missed counts for everyone.
 
