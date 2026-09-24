@@ -28,7 +28,9 @@ const HEADERS = {
 const CATEGORIES = ['Daily', 'Weekly', 'Monthly', 'One-time'];
 const SHIFTS = ['Morning', 'Evening', 'General'];
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // index + 1 = ISO weekday
-const STATUSES = ['Pending', 'Done', 'N/A'];
+const STATUSES = ['Pending', 'In progress', 'Done', 'N/A'];
+/** Pending and In progress are both still open (not done). */
+function isOpen_(status) { return status === 'Pending' || status === 'In progress'; }
 const SLOTS = ['morning', 'afternoon', 'evening', 'night'];
 const DEFAULT_SETTINGS = { MORNING_TIME: '08:00', AFTERNOON_TIME: '14:00', EVENING_TIME: '20:00', NIGHT_TIME: '23:00', ADMIN_SUMMARY: 'Yes' };
 const END_OF_DAY = '23:59';
@@ -541,8 +543,12 @@ function applyItemUpdate_(member, taskId, dueDate, changes, tasks, logMap, keepR
 
     if (changes.checked) {
       checked = Array.from(new Set(changes.checked.map(Number).filter(i => Number.isInteger(i) && i >= 0 && i < n))).sort((a, b) => a - b);
-      // Ticking every required item completes the task; optional items (e.g. surprise checks) never block it
-      if (required.length && status !== 'N/A') status = requiredDone() ? 'Done' : 'Pending';
+      // Ticking every required item completes the task; some ticks mean work has started (In progress).
+      // Optional items (e.g. surprise checks) never block completion.
+      if (status !== 'N/A') {
+        if (required.length) status = requiredDone() ? 'Done' : (checked.length ? 'In progress' : 'Pending');
+        else if (status !== 'Done') status = checked.length ? 'In progress' : 'Pending';
+      }
     }
     if (changes.status) {
       if (!STATUSES.includes(changes.status)) throw new Error('Invalid status.');
@@ -820,15 +826,15 @@ function dispatch_(events, tasks) {
 function slotMessage_(m, ev, items, s) {
   const day = ev.day;
   const first = esc_(firstName_(m.name));
-  const pending = items.filter(i => i.status === 'Pending');
+  const pending = items.filter(i => isOpen_(i.status));
   const todays = pending.filter(i => !i.flexible);
   const carried = todays.filter(i => i.dueDate < day);
   const morning = todays.filter(i => i.dueDate === day && i.shift === 'Morning');
   const later = todays.filter(i => i.dueDate === day && i.shift !== 'Morning');
   const week = items.filter(i => i.flexible === 'week');
   const month = items.filter(i => i.flexible === 'month');
-  const weekPending = week.filter(i => i.status === 'Pending');
-  const monthPending = month.filter(i => i.status === 'Pending');
+  const weekPending = week.filter(i => isOpen_(i.status));
+  const monthPending = month.filter(i => isOpen_(i.status));
   const wd = isoDay_(day);
   const dom = Number(day.slice(8));
   const monthEnd = Number(monthRange_(day).end.slice(8));
@@ -953,24 +959,24 @@ function dayListMessage_(member, pendingOnly) {
   ];
   let shown = 0;
   groups.forEach(([label, fn]) => {
-    const list = items.filter(fn).filter(i => !pendingOnly || i.status === 'Pending');
+    const list = items.filter(fn).filter(i => !pendingOnly || isOpen_(i.status));
     if (!list.length) return;
     lines.push('', `<b>${label}</b>`);
     list.forEach(i => {
       if (shown++ >= MAX_LINES) return;
-      const mark = i.status === 'Done' ? (i.doneLate ? '🟠' : '✅') : '⬜';
+      const mark = i.status === 'Done' ? (i.doneLate ? '🟠' : '✅') : i.status === 'In progress' ? '🔄' : '⬜';
       lines.push(`${mark} ${esc_(short_(i.title))}` + (i.late && i.dueDate < today ? ` <i>(due ${prettyDate_(i.dueDate)})</i>` : ''));
     });
   });
   if (shown > MAX_LINES) lines.push(`…and ${shown - MAX_LINES} more`);
   if (!items.length) lines.push('', 'No tasks right now 🎉');
-  else if (pendingOnly && !items.some(i => i.status === 'Pending')) lines.push('', 'Nothing pending. Great job! 🎉');
+  else if (pendingOnly && !items.some(i => isOpen_(i.status))) lines.push('', 'Nothing pending. Great job! 🎉');
   return lines.join('\n');
 }
 
 function itemLines_(items, opts) {
   opts = opts || {};
-  const lines = items.slice(0, MAX_LINES).map(i => '• ' + esc_(short_(i.title))
+  const lines = items.slice(0, MAX_LINES).map(i => (i.status === 'In progress' ? '🔄 ' : '• ') + esc_(short_(i.title))
     + (i.time ? ` · ${fmt12_(i.time)}` : '')
     + (opts.due && i.dueDate < todayStr_() ? ` <i>(due ${prettyDate_(i.dueDate)})</i>` : ''));
   if (items.length > MAX_LINES) lines.push(`…and ${items.length - MAX_LINES} more`);
@@ -1104,8 +1110,8 @@ function memberItems_(member, dayStr, tasks, logMap) {
     const entry = logMap[key_(t.id, member.id, due)];
     const status = entry ? entry.status : 'Pending';
     // A one-time task has no next occurrence: once finished, show it only on the day it was finished
-    if (t.category === 'One-time' && status !== 'Pending' && entry.updatedAt && entry.updatedAt.slice(0, 10) < dayStr) return;
-    const pending = status === 'Pending';
+    if (t.category === 'One-time' && (status === 'Done' || status === 'N/A') && entry.updatedAt && entry.updatedAt.slice(0, 10) < dayStr) return;
+    const pending = isOpen_(status);
     const deadline = deadlineFor_(t, due, s);
     const flexible = isFlexible_(t);
     const stillOpen = occurrenceFor_(t, today) === due;
@@ -1146,6 +1152,7 @@ function countItems_(items, dayStr) {
     done: done.length,
     doneLate: done.filter(i => i.doneLate).length,
     pending: due.length - done.length,
+    inProgress: due.filter(i => i.status === 'In progress').length,
     late: due.filter(i => i.late).length,
     missed: due.filter(i => i.missed).length,
     weekTotal: week.length, weekDone: week.filter(i => i.status === 'Done').length,
