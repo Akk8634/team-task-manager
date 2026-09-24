@@ -144,6 +144,7 @@ const API = {
   myDay: { role: 'member', fn: apiMyDay_ },
   upcoming: { role: 'member', fn: apiUpcoming_ },
   updateItem: { role: 'member', fn: apiUpdateItem_ },
+  updateItems: { role: 'member', fn: apiUpdateItems_ },
   dashboard: { role: 'admin', fn: apiDashboard_ },
   listTasks: { role: 'admin', fn: apiListTasks_ },
   saveTask: { role: 'admin', fn: apiSaveTask_ },
@@ -495,15 +496,41 @@ function apiBroadcast_(ctx, args) {
 // ───────────────────────── Task status updates ─────────────────────────
 
 function updateItem_(member, taskId, dueDate, changes) {
+  return withLock_(() => applyItemUpdate_(member, taskId, dueDate, changes, getTasks_(), getLogMap_(), false));
+}
+
+/**
+ * Several task updates from one member in a single request (the Mini App batches quick taps).
+ * updates: [{ taskId, dueDate, status?, checked?, remarks? }]. Each one succeeds or fails on its own.
+ */
+function apiUpdateItems_(ctx, args) {
+  const updates = (Array.isArray(args.updates) ? args.updates : []).slice(0, 100);
   return withLock_(() => {
     const tasks = getTasks_();
+    const logMap = getLogMap_();
+    return {
+      results: updates.map(u => {
+        try {
+          const changes = { status: u.status, checked: Array.isArray(u.checked) ? u.checked : undefined, remarks: u.remarks };
+          // keepRows: never delete rows inside a batch, so the row numbers of later updates stay valid
+          return { item: applyItemUpdate_(ctx.member, String(u.taskId || ''), String(u.dueDate || ''), changes, tasks, logMap, true) };
+        } catch (e) {
+          return { error: e.message };
+        }
+      }),
+    };
+  });
+}
+
+/** Applies one status/checklist/remarks change. Caller must hold the script lock. */
+function applyItemUpdate_(member, taskId, dueDate, changes, tasks, logMap, keepRows) {
+  {
     const task = tasks.find(t => t.id === taskId);
     if (!task) throw new Error('Task not found. Please refresh.');
     if (!isAssigned_(task, member)) throw new Error('This task is not assigned to you.');
     const today = todayStr_();
     if (occurrenceFor_(task, today) !== dueDate) throw new Error('This task is closed (the deadline period has ended). Please refresh.');
 
-    const logMap = getLogMap_();
     const entry = logMap[key_(taskId, member.id, dueDate)];
     let status = entry ? entry.status : 'Pending';
     let checked = entry ? entry.checked.slice() : [];
@@ -529,21 +556,25 @@ function updateItem_(member, taskId, dueDate, changes) {
     if (changes.remarks !== undefined && changes.remarks !== null) remarks = String(changes.remarks).trim().slice(0, 500);
 
     const updatedAt = nowStr_();
+    const k = key_(taskId, member.id, dueDate);
     const empty = status === 'Pending' && !checked.length && !remarks;
-    if (empty) {
+    if (empty && !keepRows) {
       if (entry) deleteRow_(SHEET_LOG, entry.row);
-      delete logMap[key_(taskId, member.id, dueDate)];
+      delete logMap[k];
+    } else if (empty && !entry) {
+      // nothing to store
     } else {
       // Keep the original completion time when only remarks/checklist change on a done task
       const stamp = entry && entry.status === status && status !== 'Pending' ? entry.updatedAt : updatedAt;
-      const row = [entry ? entry.logId : 'L' + Date.now() + Math.floor(Math.random() * 1000), dueDate, taskId, task.title,
-        member.id, member.name, status, checked.join('|'), remarks, stamp];
-      if (entry) writeRow_(SHEET_LOG, entry.row, row);
-      else appendRow_(SHEET_LOG, row);
-      logMap[key_(taskId, member.id, dueDate)] = { status, checked, remarks, updatedAt: stamp };
+      const logId = entry ? entry.logId : 'L' + Date.now() + Math.floor(Math.random() * 1000);
+      const row = [logId, dueDate, taskId, task.title, member.id, member.name, status, checked.join('|'), remarks, stamp];
+      let rowNum;
+      if (entry) { writeRow_(SHEET_LOG, entry.row, row); rowNum = entry.row; }
+      else { appendRow_(SHEET_LOG, row); rowNum = sheet_(SHEET_LOG).getLastRow(); }
+      logMap[k] = { row: rowNum, logId, status, checked, remarks, updatedAt: stamp };
     }
     return memberItems_(member, today, [task], logMap)[0];
-  });
+  }
 }
 
 // ───────────────────────── Team ─────────────────────────

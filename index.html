@@ -236,10 +236,13 @@ function toast(msg, isError, action) {
 function undoToast(taskId, dueDate, msg) {
   toast(msg || 'Marked as done', false, {
     label: 'UNDO',
-    fn: async () => {
+    fn: () => {
       const it = findItem(taskId, dueDate);
       if (!it) return;
-      try { await saveItem(it, { status: 'Pending' }); tap(); toast('Undone: task is pending again'); refreshView(); } catch (e) { fail(e); }
+      queueItemChange(it, { status: 'Pending' });
+      tap();
+      toast('Undone: task is pending again');
+      refreshView();
     },
   });
 }
@@ -326,11 +329,19 @@ async function boot() {
   }
   if (!tg || !tg.initData) return screen('📱', 'Open in Telegram', 'Please open this app from the Team Task Manager bot in Telegram.');
   if (!API_URL) return screen('⚠️', 'App link incomplete', 'Please open the app using the "Open Tasks" button in the bot.');
+  // Show the last saved copy at once (Apps Script needs a few seconds to wake up), then refresh it
+  const cached = readBootCache();
+  if (cached) { handleBoot(cached); setSync(true); }
   try {
     const b = await api('bootstrap');
-    handleBoot(b);
+    writeBootCache(b);
+    if (cached && b.state === 'active' && S.boot && S.boot.state === 'active') refreshBoot(b);
+    else handleBoot(b);
   } catch (e) {
-    screen('⚠️', 'Could not connect', esc(e.message), '<button class="btn" style="max-width:260px" onclick="loading();boot()">Try again</button>');
+    if (cached) toast('Could not refresh. Showing the last saved data.', true);
+    else screen('⚠️', 'Could not connect', esc(e.message), '<button class="btn" style="max-width:260px" onclick="loading();boot()">Try again</button>');
+  } finally {
+    setSync(false);
   }
 }
 function handleBoot(b) {
@@ -338,13 +349,30 @@ function handleBoot(b) {
   if (b.state === 'claim') return renderClaim();
   if (b.state === 'pending') return screen('⏳', 'Waiting for approval', 'Your request has been sent to the admin. You will get a message in the bot once you are approved.');
   if (b.state === 'rejected') return screen('🚫', 'Access declined', 'Your request was declined. Please contact your admin.');
+  S.tab = b.user.getsTasks || !isAdmin() ? 'today' : 'team';
+  applyBootData(b);
+  openTab();
+  if (!b.upcoming) setTimeout(prefetchUpcoming, 600);
+  if (isAdmin() && !b.admin) setTimeout(prefetchAdmin, 800);
+}
+// Fresh bootstrap arrived while the cached copy is on screen: update the data, keep the user where they are
+function refreshBoot(b) {
+  const roleChanged = !S.boot.user || S.boot.user.role !== b.user.role;
+  S.boot = b;
+  applyBootData(b);
+  if (roleChanged) renderTabs();
+  if (!S.stack.length) renderCurrentTab();
+}
+// The backend sends the first screens' data with bootstrap (one request to open the app).
+// Older backends don't, so the tabs fetch it themselves.
+function applyBootData(b) {
+  const now = Date.now();
   S.today = b.today;
   S.cfg = b.settings;
-  S.tab = b.user.getsTasks || !isAdmin() ? 'today' : 'team';
-  // The backend sends the first screens' data with bootstrap (one request to open the app).
-  // Older backends don't, so fall back to fetching it separately.
-  const now = Date.now();
-  if (b.myDay) Object.assign(S, { items: b.myDay.items, today: b.myDay.today, cfg: b.myDay.settings, week: b.myDay.week, month: b.myDay.month, todayAt: now });
+  if (b.myDay) {
+    Object.assign(S, { today: b.myDay.today, cfg: b.myDay.settings, week: b.myDay.week, month: b.myDay.month, todayAt: now });
+    setItems(b.myDay.items);
+  }
   if (b.upcoming) Object.assign(S, { upcoming: b.upcoming, upcomingAt: now });
   if (b.admin) {
     S.serverTasks = { tasks: b.admin.tasks.tasks, members: b.admin.tasks.members };
@@ -354,9 +382,42 @@ function handleBoot(b) {
     S.settings = b.admin.settings;
     S.manageAt = { tasksData: now, team: now, settings: now };
   }
-  openTab();
-  if (!b.upcoming) setTimeout(prefetchUpcoming, 600);
-  if (isAdmin() && !b.admin) setTimeout(prefetchAdmin, 800);
+}
+
+// ───────── Saved copy for instant opening ─────────
+function bootCacheKey() { const u = tg && tg.initDataUnsafe && tg.initDataUnsafe.user; return u ? 'ttm_boot_' + u.id : null; }
+function localDay() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function readBootCache() {
+  try {
+    const k = bootCacheKey();
+    const c = k && JSON.parse(localStorage.getItem(k) || 'null');
+    return c && c.day === localDay() && c.data && c.data.state === 'active' ? c.data : null; // yesterday's copy is useless
+  } catch (e) { return null; }
+}
+function writeBootCache(b) {
+  try {
+    const k = bootCacheKey();
+    if (!k) return;
+    if (!b || b.state !== 'active') { localStorage.removeItem(k); return; }
+    localStorage.setItem(k, JSON.stringify({ day: b.today, data: b }));
+  } catch (e) { /* storage full or blocked: the app still works, it just opens slower */ }
+}
+// Keep the saved copy in step with what the member sees, so the next opening shows the latest ticks
+function saveBootCacheSoon() {
+  clearTimeout(S.cacheTimer);
+  S.cacheTimer = setTimeout(() => {
+    if (!S.boot || S.boot.state !== 'active' || !S.boot.myDay) return;
+    const b = Object.assign({}, S.boot, { myDay: Object.assign({}, S.boot.myDay, { items: S.items.map(stripLocal) }) });
+    if (S.upcoming) b.upcoming = S.upcoming;
+    writeBootCache(b);
+  }, 500);
+}
+function stripLocal(it) { const c = Object.assign({}, it); delete c._group; return c; }
+function setSync(on) {
+  let p = $('#syncpill');
+  if (!p) { p = document.createElement('div'); p.id = 'syncpill'; p.className = 'savebar'; p.style.right = 'auto'; p.style.left = '8px'; document.body.appendChild(p); }
+  p.className = on ? 'savebar show' : 'savebar';
+  p.innerHTML = on ? '<span class="mini-spin"></span>Updating…' : '';
 }
 // Load admin screens in the background so switching tabs doesn't wait on the server
 function prefetchAdmin() {
@@ -379,16 +440,149 @@ function renderClaim() {
 // ───────── Today ─────────
 // Tabs show what we already have right away, and only ask the server again when that data is getting old
 const FRESH_MS = { today: 20000, upcoming: 60000 };
-S.itemSaves = 0; // task updates in flight; a background refresh must not undo them on screen
 async function loadToday(force) {
   if (S.todayAt) renderToday(); else loading();
   if (!force && S.todayAt && Date.now() - S.todayAt < FRESH_MS.today) return;
+  // Don't reshuffle the list while the member is tapping through it
+  if (S.todayAt && (itemsPending() || Date.now() - (S.lastTap || 0) < 5000)) return;
   try {
     const d = await api('myDay');
-    if (S.itemSaves) return;
-    Object.assign(S, { items: d.items, today: d.today, cfg: d.settings, week: d.week, month: d.month, todayAt: Date.now() });
+    if (itemsPending() || Date.now() - (S.lastTap || 0) < 5000) return;
+    Object.assign(S, { today: d.today, cfg: d.settings, week: d.week, month: d.month, todayAt: Date.now() });
+    setItems(d.items);
+    saveBootCacheSoon();
     if (S.tab === 'today' && !S.stack.length) renderToday();
   } catch (e) { if (!S.todayAt) fail(e); }
+}
+/**
+ * Replaces the task list with server data. Each item remembers which section it was in, so marking
+ * it done doesn't make the list jump (items only move sections on the next full refresh).
+ * Changes the member made that the server hasn't confirmed yet are re-applied on top.
+ */
+function setItems(items) {
+  const prev = {};
+  (S.items || []).forEach(i => { prev[itemKey(i)] = i._group; });
+  S.items = items.map(i => Object.assign(i, { _group: prev[itemKey(i)] || groupOf(i) }));
+  Object.keys(S.itemQueue).concat(Object.keys(S.itemInflight)).forEach(k => {
+    const it = S.items.find(i => itemKey(i) === k);
+    const p = S.itemInflight[k];
+    const q = S.itemQueue[k];
+    if (it && p) applyLocal(it, p.changes);
+    if (it && q) applyLocal(it, q.changes);
+  });
+}
+function groupOf(i) {
+  if (i.optional) return 'optional';
+  if (i.late) return 'late';
+  if (i.flexible) return i.flexible;
+  return i.shift;
+}
+
+// ───────── Member task updates: instant on screen, sent in the background ─────────
+// Every tap updates the screen immediately. Taps made within ~0.3 s go to the server together in one
+// request; a newer tap on the same task replaces an older one that hasn't been sent yet.
+S.itemQueue = {};    // key → { taskId, dueDate, changes } waiting to be sent
+S.itemInflight = {}; // key → same, being sent now
+S.itemSending = false;
+function itemKey(i) { return i.taskId + '|' + i.dueDate; }
+function itemsPending() { return Object.keys(S.itemQueue).length + Object.keys(S.itemInflight).length; }
+function mergeChanges(a, b) {
+  const m = Object.assign({}, a);
+  if (b.checked !== undefined) { m.checked = b.checked; delete m.status; } // the checklist decides done/pending
+  if (b.status !== undefined) { m.status = b.status; if (b.status === 'Pending') delete m.checked; }
+  if (b.remarks !== undefined) m.remarks = b.remarks;
+  return m;
+}
+/** Same rules as the backend, so the screen shows the final result straight away. */
+function applyLocal(it, ch) {
+  const was = it.status;
+  if (ch.checked !== undefined) {
+    it.checked = ch.checked.slice();
+    if (it.status !== 'N/A' && reqItems(it).length) it.status = reqLeft(it) ? 'Pending' : 'Done';
+  }
+  if (ch.status !== undefined) { it.status = ch.status; if (ch.status === 'Pending') it.checked = []; }
+  if (ch.remarks !== undefined) it.remarks = ch.remarks;
+  const now = nowStamp();
+  if (it.status === 'Pending') it.updatedAt = '';
+  else if (was !== it.status || !it.updatedAt) it.updatedAt = now;
+  it.doneLate = it.status === 'Done' && it.updatedAt > it.deadline;
+  it.late = it.status === 'Pending' && !it.optional && !it.missed && now > it.deadline;
+}
+function queueItemChange(it, changes) {
+  const k = itemKey(it);
+  const q = S.itemQueue[k];
+  S.itemQueue[k] = { taskId: it.taskId, dueDate: it.dueDate, changes: mergeChanges(q ? q.changes : {}, changes) };
+  S.lastTap = Date.now();
+  applyLocal(it, changes);
+  updateSaveBar();
+  saveBootCacheSoon();
+  clearTimeout(S.itemTimer);
+  S.itemTimer = setTimeout(sendItems, 300);
+}
+async function sendItems() {
+  if (S.itemSending || !Object.keys(S.itemQueue).length) return;
+  S.itemSending = true;
+  closingGuard(true);
+  const batch = Object.keys(S.itemQueue).map(k => Object.assign({ key: k }, S.itemQueue[k]));
+  S.itemQueue = {};
+  batch.forEach(b => { S.itemInflight[b.key] = b; });
+  updateSaveBar();
+  let res = null;
+  let err = null;
+  for (let attempt = 1; attempt <= 3 && !res; attempt++) {
+    try { res = await sendItemBatch(batch); } catch (e) {
+      err = e;
+      if (e.fatal && !/Unknown action/.test(e.message)) break;
+      if (attempt < 3) { updateSaveBar('Connection slow, retrying…'); await sleep(1500 * attempt); }
+    }
+  }
+  batch.forEach(b => { delete S.itemInflight[b.key]; });
+  let needRefresh = false;
+  if (res) {
+    const errors = [];
+    res.results.forEach((r, i) => {
+      const b = batch[i];
+      if (r.error) { errors.push(r.error); needRefresh = true; return; }
+      if (S.itemQueue[b.key]) return; // a newer tap is waiting; keep showing that
+      const idx = S.items.findIndex(x => itemKey(x) === b.key);
+      if (idx >= 0 && r.item) S.items[idx] = Object.assign(r.item, { _group: S.items[idx]._group });
+    });
+    if (errors.length) fail(new Error(errors[0] + (errors.length > 1 ? ` (and ${errors.length - 1} more)` : '')));
+  } else {
+    // Keep the taps and try again shortly; a newer tap on the same task wins
+    batch.forEach(b => {
+      const q = S.itemQueue[b.key];
+      S.itemQueue[b.key] = q ? { taskId: b.taskId, dueDate: b.dueDate, changes: mergeChanges(b.changes, q.changes) } : b;
+    });
+    fail(new Error((err ? err.message : 'Not saved') + ' Your ticks are kept and will be sent again.'));
+    setTimeout(sendItems, 10000);
+  }
+  S.itemSending = false;
+  if (!itemsPending() && !S.outbox.length && !S.inflight.length) closingGuard(false);
+  updateSaveBar();
+  saveBootCacheSoon();
+  if (res && Object.keys(S.itemQueue).length) sendItems();
+  if (needRefresh && !itemsPending()) { S.lastTap = 0; loadToday(true); }
+  else refreshView();
+}
+async function sendItemBatch(batch) {
+  const updates = batch.map(b => Object.assign({ taskId: b.taskId, dueDate: b.dueDate }, b.changes));
+  if (!S.noItemBatch) {
+    try {
+      return await api('updateItems', { updates }, 30000);
+    } catch (e) {
+      if (!/Unknown action/.test(e.message)) throw e;
+      S.noItemBatch = true; // backend not updated yet: one request per task
+    }
+  }
+  const results = [];
+  for (const u of updates) {
+    try { results.push({ item: await api('updateItem', u) }); } catch (e) {
+      if (!e.fatal) throw e;
+      results.push({ error: e.message });
+    }
+  }
+  return { results };
 }
 // Load the Upcoming tab in the background so the first switch to it is instant
 function prefetchUpcoming() {
@@ -435,13 +629,14 @@ function renderToday() {
     return;
   }
   const groups = [
-    ['🔴 Late', 'overdue', i => i.late && !i.optional],
-    ['☀️ Morning', 'by ' + fmt12(S.cfg.afternoonTime), i => !i.late && !i.optional && !i.flexible && i.shift === 'Morning'],
-    ['🌇 Evening', 'by end of day', i => !i.late && !i.optional && !i.flexible && i.shift === 'Evening'],
-    ['📌 General', 'by end of day', i => !i.late && !i.optional && !i.flexible && i.shift === 'General'],
-    ['📆 This week', 'by Sun ' + fmtShort(S.week.end), i => !i.late && !i.optional && i.flexible === 'week'],
-    ['🗓️ This month', 'by ' + fmtShort(S.month.end), i => !i.late && !i.optional && i.flexible === 'month'],
-    ['🔸 If applicable', 'when it happens', i => i.optional],
+    // Sections use the group each item had when the list was loaded, so ticking never moves rows around
+    ['🔴 Late', 'overdue', i => i._group === 'late'],
+    ['☀️ Morning', 'by ' + fmt12(S.cfg.afternoonTime), i => i._group === 'Morning'],
+    ['🌇 Evening', 'by end of day', i => i._group === 'Evening'],
+    ['📌 General', 'by end of day', i => i._group === 'General'],
+    ['📆 This week', 'by Sun ' + fmtShort(S.week.end), i => i._group === 'week'],
+    ['🗓️ This month', 'by ' + fmtShort(S.month.end), i => i._group === 'month'],
+    ['🔸 If applicable', 'when it happens', i => i._group === 'optional'],
   ];
   groups.forEach(([label, sub, fn]) => {
     const list = items.map((it, idx) => [it, idx]).filter(([it]) => fn(it));
@@ -477,30 +672,13 @@ async function toggleItem(idx) {
   if (!it) return;
   if (it.status === 'Pending' && reqLeft(it)) return push(() => renderItem(it.taskId, it.dueDate));
   const next = it.status === 'Pending' ? 'Done' : 'Pending';
-  const before = Object.assign({}, it);
-  Object.assign(it, { status: next, updatedAt: next === 'Done' ? nowStamp() : '' });
-  if (next === 'Pending') it.checked = [];
+  queueItemChange(it, { status: next });
   if (next === 'Done') haptic('success'); else tap();
   renderToday();
-  try {
-    const res = await saveItem(it, { status: next });
-    if (S.tab === 'today' && !S.stack.length) renderToday();
-    if (next === 'Done') undoToast(res.taskId, res.dueDate, res.doneLate ? 'Done (late) 🟠' : 'Marked as done ✅');
-    else toast(res.late ? 'Marked as not done. It is now in Late.' : 'Marked as not done');
-  } catch (e) { Object.assign(it, before); renderToday(); fail(e); }
+  if (next === 'Done') undoToast(it.taskId, it.dueDate, it.doneLate ? 'Done (late) 🟠' : 'Marked as done ✅');
+  else toast(it.late ? 'Marked as not done (late)' : 'Marked as not done');
 }
-function nowStamp() { const d = new Date(); return S.today + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
-async function saveItem(it, changes) {
-  S.itemSaves++;
-  try {
-    const res = await api('updateItem', Object.assign({ taskId: it.taskId, dueDate: it.dueDate }, changes));
-    const i = S.items.findIndex(x => x.taskId === res.taskId && x.dueDate === res.dueDate);
-    if (i >= 0) S.items[i] = res;
-    return res;
-  } finally {
-    S.itemSaves--;
-  }
-}
+function nowStamp() { const d = new Date(); return localDay() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
 
 // ───────── Task detail ─────────
 function findItem(taskId, due) { return S.items.find(x => x.taskId === taskId && x.dueDate === due); }
@@ -546,20 +724,18 @@ function renderItem(taskId, due) {
   app.innerHTML = html;
   S.detail = { taskId, due };
 }
-async function detailChange(changes, okMsg, btn) {
+/** Detail-screen change: applied on screen at once and sent in the background (never waits). */
+function detailChange(changes, okMsg) {
   const { taskId, due } = S.detail;
-  const wasDone = findItem(taskId, due).status === 'Done';
-  if (btn) btn.disabled = true;
-  try {
-    const res = await saveItem(findItem(taskId, due), changes);
-    const justDone = res.status === 'Done' && !wasDone;
-    if (justDone) haptic('success');
-    if (justDone) undoToast(taskId, due, res.doneLate ? 'Done (late) 🟠' : okMsg || 'Marked as done ✅');
-    else if (okMsg) toast(okMsg);
-    if (changes.status && changes.status !== 'Pending') { pop(); return true; }
-    renderItem(taskId, due);
-    return true;
-  } catch (e) { if (btn) btn.disabled = false; fail(e); return false; }
+  const it = findItem(taskId, due);
+  if (!it) return;
+  const wasDone = it.status === 'Done';
+  queueItemChange(it, changes);
+  const justDone = it.status === 'Done' && !wasDone;
+  if (justDone) { haptic('success'); undoToast(taskId, due, it.doneLate ? 'Done (late) 🟠' : okMsg || 'Marked as done ✅'); }
+  else if (okMsg) toast(okMsg);
+  if (changes.status && changes.status !== 'Pending') return pop();
+  renderItem(taskId, due);
 }
 
 // ───────── Upcoming ─────────
@@ -904,7 +1080,7 @@ function closingGuard(on) {
 }
 function updateSaveBar(note) {
   const bar = $('#savebar');
-  const n = S.outbox.length + S.inflight.length;
+  const n = S.outbox.length + S.inflight.length + itemsPending();
   if (n) {
     bar.className = 'savebar show';
     bar.innerHTML = `<span class="mini-spin"></span>${note || 'Saving ' + n + ' change' + (n === 1 ? '' : 's') + '…'}`;
@@ -1008,18 +1184,14 @@ const ACTIONS = {
   checkItem(el) {
     const it = findItem(S.detail.taskId, S.detail.due);
     const ci = Number(el.dataset.ci);
-    const before = it.checked;
-    const checked = before.includes(ci) ? before.filter(x => x !== ci) : before.concat(ci);
+    const checked = it.checked.includes(ci) ? it.checked.filter(x => x !== ci) : it.checked.concat(ci);
     tap();
-    it.checked = checked; // optimistic
-    renderItem(S.detail.taskId, S.detail.due);
-    detailChange({ checked }, reqItems(it).length && !reqLeft(it) ? 'All required items ticked, task done ✅' : '')
-      .then(okd => { if (!okd) { it.checked = before; renderItem(S.detail.taskId, S.detail.due); } });
+    detailChange({ checked }, 'All required items ticked, task done ✅');
   },
-  saveRemarks: el => detailChange({ remarks: $('#remarks').value }, 'Remark saved', el),
+  saveRemarks: () => detailChange({ remarks: $('#remarks').value }, 'Remark saved'),
   setStatus(el) {
     const st = el.dataset.status;
-    detailChange({ status: st, remarks: $('#remarks').value }, st === 'Done' ? 'Task done ✅' : st === 'N/A' ? 'Marked as not applicable' : 'Marked as not done', el);
+    detailChange({ status: st, remarks: $('#remarks').value }, st === 'Done' ? 'Task done ✅' : st === 'N/A' ? 'Marked as not applicable' : 'Marked as not done');
   },
   toggleMember(el) { S.open[el.dataset.id] = !S.open[el.dataset.id]; tap(); renderDashboard(); },
   manageTab(el) { S.manageTab = el.dataset.k; tap(); renderManage(); },
