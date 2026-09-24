@@ -125,7 +125,12 @@
   .field label { display: block; font-size: 13px; color: var(--hint); margin-bottom: 3px; }
   .field input, .field select, .field textarea { width: 100%; border: 0; background: none; color: var(--text); font: inherit; padding: 2px 0; outline: none; }
   .field textarea { resize: vertical; min-height: 64px; }
-  .field select { -webkit-appearance: none; appearance: none; }
+  .field select {
+    -webkit-appearance: none; appearance: none; padding-right: 24px; cursor: pointer;
+    background: var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%238e8e93' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 4px center;
+  }
+  /* Native dropdown lists use the OS theme; give options explicit colors so they stay readable in dark mode */
+  select option { background-color: var(--card); color: var(--text); }
   input[type="date"], input[type="time"] { min-height: 24px; }
   .daypick { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 4px; }
   .daypick button { border: 0; width: 40px; height: 34px; border-radius: 8px; background: var(--soft); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; }
@@ -281,6 +286,12 @@ function renderCurrentTab() {
 }
 
 // ───────── Boot ─────────
+// Tell the browser which theme Telegram is using, so native dropdowns and date/time pickers match it
+function applyColorScheme() {
+  const scheme = tg && tg.colorScheme === 'dark' ? 'dark' : 'light';
+  document.documentElement.style.colorScheme = scheme;
+  document.documentElement.dataset.theme = scheme;
+}
 let tgReady = false;
 async function boot() {
   if (tg && !tgReady) {
@@ -290,6 +301,8 @@ async function boot() {
     try { tg.setHeaderColor('secondary_bg_color'); tg.setBackgroundColor('secondary_bg_color'); } catch (e) { /* older client */ }
     try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) { /* older client */ }
     if (hasNativeBack) tg.BackButton.onClick(pop);
+    applyColorScheme();
+    try { tg.onEvent('themeChanged', applyColorScheme); } catch (e) { /* older client */ }
   }
   if (!tg || !tg.initData) return screen('📱', 'Open in Telegram', 'Please open this app from the Team Task Manager bot in Telegram.');
   if (!API_URL) return screen('⚠️', 'App link incomplete', 'Please open the app using the "Open Tasks" button in the bot.');
