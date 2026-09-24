@@ -342,6 +342,7 @@ function handleBoot(b) {
   S.cfg = b.settings;
   S.tab = b.user.getsTasks || !isAdmin() ? 'today' : 'team';
   openTab();
+  setTimeout(prefetchUpcoming, 600);
   if (isAdmin()) setTimeout(prefetchAdmin, 800);
 }
 // Load admin screens in the background so switching tabs doesn't wait on the server
@@ -363,13 +364,22 @@ function renderClaim() {
 }
 
 // ───────── Today ─────────
-async function loadToday() {
-  if (!S.items.length) loading();
+// Tabs show what we already have right away, and only ask the server again when that data is getting old
+const FRESH_MS = { today: 20000, upcoming: 60000 };
+S.itemSaves = 0; // task updates in flight; a background refresh must not undo them on screen
+async function loadToday(force) {
+  if (S.todayAt) renderToday(); else loading();
+  if (!force && S.todayAt && Date.now() - S.todayAt < FRESH_MS.today) return;
   try {
     const d = await api('myDay');
-    Object.assign(S, { items: d.items, today: d.today, cfg: d.settings, week: d.week, month: d.month });
+    if (S.itemSaves) return;
+    Object.assign(S, { items: d.items, today: d.today, cfg: d.settings, week: d.week, month: d.month, todayAt: Date.now() });
     if (S.tab === 'today' && !S.stack.length) renderToday();
-  } catch (e) { fail(e); }
+  } catch (e) { if (!S.todayAt) fail(e); }
+}
+// Load the Upcoming tab in the background so the first switch to it is instant
+function prefetchUpcoming() {
+  api('upcoming').then(d => { S.upcoming = d; S.upcomingAt = Date.now(); }).catch(() => {});
 }
 function daysBetween(a, b) { return Math.round((pd(b) - pd(a)) / 86400000); }
 function daysLeftTxt(end) { const n = daysBetween(S.today, end); return n <= 0 ? 'last day' : n + ' day' + (n === 1 ? '' : 's') + ' left'; }
@@ -468,10 +478,15 @@ async function toggleItem(idx) {
 }
 function nowStamp() { const d = new Date(); return S.today + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
 async function saveItem(it, changes) {
-  const res = await api('updateItem', Object.assign({ taskId: it.taskId, dueDate: it.dueDate }, changes));
-  const i = S.items.findIndex(x => x.taskId === res.taskId && x.dueDate === res.dueDate);
-  if (i >= 0) S.items[i] = res;
-  return res;
+  S.itemSaves++;
+  try {
+    const res = await api('updateItem', Object.assign({ taskId: it.taskId, dueDate: it.dueDate }, changes));
+    const i = S.items.findIndex(x => x.taskId === res.taskId && x.dueDate === res.dueDate);
+    if (i >= 0) S.items[i] = res;
+    return res;
+  } finally {
+    S.itemSaves--;
+  }
 }
 
 // ───────── Task detail ─────────
@@ -537,12 +552,14 @@ async function detailChange(changes, okMsg, btn) {
 // ───────── Upcoming ─────────
 async function loadUpcoming() {
   if (S.upcoming) renderUpcoming(S.upcoming); else loading();
+  if (S.upcomingAt && Date.now() - S.upcomingAt < FRESH_MS.upcoming) return;
   try {
     const d = await api('upcoming');
     S.upcoming = d;
+    S.upcomingAt = Date.now();
     if (S.tab !== 'upcoming' || S.stack.length) return;
     renderUpcoming(d);
-  } catch (e) { fail(e); }
+  } catch (e) { if (!S.upcoming) fail(e); }
 }
 function renderUpcoming(d) {
   {
@@ -1115,7 +1132,7 @@ $('#savebar').addEventListener('click', e => {
   if (!b) return;
   if (b.dataset.save === 'retry') retryFailed(); else discardFailed();
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.boot && S.boot.state === 'active' && S.tab === 'today' && !S.stack.length) loadToday(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.boot && S.boot.state === 'active' && S.tab === 'today' && !S.stack.length) loadToday(true); });
 
 boot();
 </script>
