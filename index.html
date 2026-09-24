@@ -666,6 +666,7 @@ function settingsHtml() {
     <div class="section-foot">Morning-shift tasks are late after the Afternoon time. Evening and general tasks are late after midnight. Weekly “any day” tasks are due by Sunday, monthly “any time” tasks by the last day of the month. Timezone: ${esc(s.timeZone)}.</div>
     <button class="btn" data-act="saveSettings">Save settings</button>
     <div class="section-title">Send now</div><div class="section">
+      <div class="row tap" data-act="openBroadcast"><div class="body"><div class="title">📢 Message to team</div><div class="meta">Write your own message and send it to everyone or selected people</div></div><span class="chev">›</span></div>
       <div class="row tap" data-act="sendNow" data-k="test"><div class="body"><div class="title">Send me a test message</div></div><span class="chev">›</span></div>
       <div class="row tap" data-act="sendNow" data-k="morning"><div class="body"><div class="title">☀️ Morning reminder to everyone</div></div><span class="chev">›</span></div>
       <div class="row tap" data-act="sendNow" data-k="afternoon"><div class="body"><div class="title">🌤️ Afternoon check to everyone</div></div><span class="chev">›</span></div>
@@ -923,6 +924,30 @@ function collectTask(id) {
   };
 }
 
+// ───────── Message to team (admin) ─────────
+async function renderBroadcast() {
+  if (!S.team) {
+    loading();
+    try { S.team = await api('listTeam'); } catch (e) { fail(e); return pop(); }
+  }
+  const people = S.team.filter(m => m.status === 'Active');
+  S.bMode = 'All';
+  app.innerHTML = backLink() + `<div class="page-head"><h1>Message to team</h1></div>
+    <div class="section-foot" style="padding-top:0">The bot sends it to each person’s Telegram chat, with your name and an Open Tasks button.</div>
+    <div class="section-title">Message</div><div class="section"><div class="field">
+      <textarea id="b_text" maxlength="3500" style="min-height:150px" placeholder="e.g. Tomorrow’s B2B call is moved to 12:30 PM. Please update Coda before the call.">${esc(S.bDraft || '')}</textarea>
+      <div class="small hint" id="b_count" style="text-align:right"></div></div></div>
+    <div class="section-title">Send to</div>
+    <div class="seg" style="margin-top:0"><button type="button" data-act="bMode" data-k="All" class="on">Everyone (${people.length})</button><button type="button" data-act="bMode" data-k="Some">Selected people</button></div>
+    <div class="section hide" id="b_people" style="margin-top:10px">${people.map(m => `<div class="row tap indent" data-act="pickMember" data-id="${esc(m.id)}"><span class="check square">${CHECK_SVG}</span>
+      <div class="body"><div class="title">${esc(m.name)}</div>${m.role === 'Admin' ? '<div class="meta"><span class="tag blue">Admin</span></div>' : ''}</div></div>`).join('')}</div>
+    <button class="btn" data-act="sendBroadcast" style="margin-top:20px">Send message</button>`;
+  const ta = $('#b_text');
+  const count = () => { S.bDraft = ta.value; $('#b_count').textContent = ta.value.length + ' / 3500'; };
+  ta.oninput = count;
+  count();
+}
+
 // ───────── Member editor (admin) ─────────
 function renderMemberEditor(id) {
   const m = S.team.find(x => x.id === id);
@@ -998,6 +1023,34 @@ const ACTIONS = {
     tap();
   },
   pickMember(el) { el.querySelector('.check').classList.toggle('done'); tap(); },
+  openBroadcast() { push(renderBroadcast); },
+  bMode(el) {
+    S.bMode = el.dataset.k;
+    el.parentNode.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === el));
+    $('#b_people').classList.toggle('hide', S.bMode === 'All');
+    tap();
+  },
+  async sendBroadcast(el) {
+    const text = $('#b_text').value.trim();
+    if (!text) return fail(new Error('Please write a message.'));
+    const to = S.bMode === 'All' ? 'All' : [...document.querySelectorAll('#b_people .check.done')].map(c => c.closest('[data-id]').dataset.id);
+    if (to !== 'All' && !to.length) return fail(new Error('Please select at least one person.'));
+    const n = to === 'All' ? S.team.filter(m => m.status === 'Active').length : to.length;
+    if (!(await confirmBox(`Send this message to ${n} ${n === 1 ? 'person' : 'people'}?`))) return;
+    el.disabled = true;
+    el.textContent = 'Sending…';
+    try {
+      const r = await api('broadcast', { text, to }, 60000);
+      S.bDraft = '';
+      haptic('success');
+      toast(`Sent to ${r.sent} ${r.sent === 1 ? 'person' : 'people'} ✅` + (r.failed.length ? `. Not delivered: ${r.failed.join(', ')} (they need to open the bot and tap Start).` : ''));
+      pop();
+    } catch (e) {
+      el.disabled = false;
+      el.textContent = 'Send message';
+      fail(/Unknown action/.test(e.message) ? new Error('Update the backend (Code.gs) and deploy a new version to use this.') : e);
+    }
+  },
   saveTask(el) {
     const data = collectTask(el.dataset.id);
     const err = validateTask(data);

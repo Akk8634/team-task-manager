@@ -153,6 +153,7 @@ const API = {
   getSettings: { role: 'admin', fn: apiGetSettings_ },
   saveSettings: { role: 'admin', fn: apiSaveSettings_ },
   sendNow: { role: 'admin', fn: apiSendNow_ },
+  broadcast: { role: 'admin', fn: apiBroadcast_ },
 };
 
 function handleApi_(req) {
@@ -453,6 +454,30 @@ function apiSendNow_(ctx, args) {
   }
   if (!SLOTS.includes(args.type)) throw new Error('Unknown reminder type.');
   return { sent: dispatch_([{ day: today, type: args.type }], getTasks_()) };
+}
+
+/**
+ * Admin's custom message to the team through the bot.
+ * args: { text, to: 'All' | [userIds] }. Returns who got it and who couldn't be reached.
+ */
+function apiBroadcast_(ctx, args) {
+  const text = String(args.text || '').trim();
+  if (!text) throw new Error('Please write a message.');
+  if (text.length > 3500) throw new Error('Message is too long (max 3500 characters).');
+  let people = getTeam_().filter(m => m.status === 'Active');
+  if (args.to !== 'All') {
+    const ids = (Array.isArray(args.to) ? args.to : []).map(String);
+    people = people.filter(m => ids.includes(m.id));
+    if (!people.length) throw new Error('Please select at least one person.');
+  }
+  const body = `📢 <b>Message from ${esc_(ctx.member.name)}</b>\n\n${esc_(text)}`;
+  const failed = [];
+  let sent = 0;
+  people.forEach(m => {
+    if (sendTelegram_(m.id, body, openAppKeyboard_())) sent++;
+    else failed.push(m.name);
+  });
+  return { sent, failed };
 }
 
 // ───────────────────────── Task status updates ─────────────────────────

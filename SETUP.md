@@ -102,7 +102,7 @@ In the Mini App, go to **Manage → Tasks → ＋ New task**:
 | Assign to | All members, or selected people only |
 | Active | Turn off to pause a task without deleting it |
 
-Test the reminders from **Manage → Settings → Send now**.
+Test the reminders from **Manage → Settings → Send now**. The same section has **📢 Message to team**, to send your own message to everyone or to selected people through the bot.
 
 ---
 
