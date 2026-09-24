@@ -144,6 +144,7 @@ const API = {
   dashboard: { role: 'admin', fn: apiDashboard_ },
   listTasks: { role: 'admin', fn: apiListTasks_ },
   saveTask: { role: 'admin', fn: apiSaveTask_ },
+  saveTasks: { role: 'admin', fn: apiSaveTasks_ },
   deleteTask: { role: 'admin', fn: apiDeleteTask_ },
   listTeam: { role: 'admin', fn: apiListTeam_ },
   reviewMember: { role: 'admin', fn: apiReviewMember_ },
@@ -269,7 +270,8 @@ function apiListTasks_() {
   };
 }
 
-function apiSaveTask_(ctx, input) {
+/** Validates one task from the Mini App and returns the values to store. Throws a readable error. */
+function prepareTask_(input) {
   const t = {
     title: String(input.title || '').trim().slice(0, 200),
     description: String(input.description || '').trim().slice(0, 1000),
@@ -321,29 +323,72 @@ function apiSaveTask_(ctx, input) {
     if (!valid.length) throw new Error('Please select at least one member, or assign to All.');
     t.assignTo = valid.join(', ');
   }
+  return t;
+}
 
+function taskRow_(t, id, createdAt) {
+  return [id, t.title, t.description, t.category, t.weeklyDays, t.monthlyDate, t.dueDate, t.shift,
+    t.time, t.type, t.checklist, t.assignTo, t.active ? 'Yes' : 'No', createdAt];
+}
+
+/**
+ * Saves several task changes in one request (the Mini App batches quick successive saves).
+ * items: [{ op: 'save', clientId, task } | { op: 'delete', id }]. Each item succeeds or fails on its own.
+ * New tasks carry a clientId so a retried request never creates the same task twice.
+ */
+function apiSaveTasks_(ctx, args) {
+  const items = (Array.isArray(args.items) ? args.items : []).slice(0, 50);
+  const cache = CacheService.getScriptCache();
+  const results = items.map(it => ({ clientId: String(it.clientId || ''), op: it.op === 'delete' ? 'delete' : 'save' }));
+  const prepared = items.map((it, i) => {
+    if (results[i].op === 'delete') return null;
+    try { return prepareTask_(it.task || {}); } catch (e) { results[i].error = e.message; return null; }
+  });
   withLock_(() => {
     const tasks = getTasks_();
-    const row = (id, createdAt) => [id, t.title, t.description, t.category, t.weeklyDays, t.monthlyDate, t.dueDate, t.shift,
-      t.time, t.type, t.checklist, t.assignTo, t.active ? 'Yes' : 'No', createdAt];
-    if (input.id) {
-      const ex = tasks.find(x => x.id === input.id);
-      if (!ex) throw new Error('Task not found.');
-      writeRow_(SHEET_TASKS, ex.row, row(ex.id, ex.createdAt));
-    } else {
-      const max = tasks.reduce((m, x) => Math.max(m, Number(x.id.replace(/\D/g, '')) || 0), 0);
-      appendRow_(SHEET_TASKS, row('T' + String(max + 1).padStart(3, '0'), nowStr_()));
-    }
+    let max = tasks.reduce((m, x) => Math.max(m, Number(x.id.replace(/\D/g, '')) || 0), 0);
+    const newRows = [];
+    const newIds = [];
+    const deletes = [];
+    items.forEach((it, i) => {
+      const r = results[i];
+      if (r.error) return;
+      if (r.op === 'delete') {
+        const ex = tasks.find(x => x.id === it.id);
+        if (ex && !deletes.includes(ex.row)) deletes.push(ex.row);
+        r.id = it.id;
+        return;
+      }
+      const input = it.task;
+      if (input.id) {
+        const ex = tasks.find(x => x.id === input.id);
+        if (!ex) { r.error = 'Task not found. It may have been deleted.'; return; }
+        writeRow_(SHEET_TASKS, ex.row, taskRow_(prepared[i], ex.id, ex.createdAt));
+        r.id = ex.id;
+        return;
+      }
+      const already = r.clientId && cache.get('ct_' + r.clientId);
+      if (already) { r.id = already; return; } // saved by an earlier attempt of this same request
+      r.id = 'T' + String(++max).padStart(3, '0');
+      newRows.push(taskRow_(prepared[i], r.id, nowStr_()));
+      if (r.clientId) newIds.push(['ct_' + r.clientId, r.id]);
+    });
+    if (newRows.length) appendRows_(SHEET_TASKS, newRows);
+    newIds.forEach(([k, id]) => cache.put(k, id, 21600));
+    deletes.sort((a, b) => b - a).forEach(row => deleteRow_(SHEET_TASKS, row));
   });
-  return apiListTasks_();
+  return Object.assign(apiListTasks_(), { results });
+}
+
+function apiSaveTask_(ctx, input) {
+  const out = apiSaveTasks_(ctx, { items: [{ op: 'save', clientId: input.clientId, task: input }] });
+  if (out.results[0].error) throw new Error(out.results[0].error);
+  return { tasks: out.tasks, members: out.members };
 }
 
 function apiDeleteTask_(ctx, args) {
-  withLock_(() => {
-    const ex = getTasks_().find(x => x.id === args.id);
-    if (ex) deleteRow_(SHEET_TASKS, ex.row);
-  });
-  return apiListTasks_();
+  const out = apiSaveTasks_(ctx, { items: [{ op: 'delete', id: args.id }] });
+  return { tasks: out.tasks, members: out.members };
 }
 
 function apiListTeam_() {
@@ -1098,6 +1143,13 @@ function appendRow_(name, values) {
   const sh = sheet_(name);
   const range = sh.getRange(sh.getLastRow() + 1, 1, 1, values.length);
   range.setNumberFormat('@').setValues([values.map(v => (v === null || v === undefined ? '' : String(v)))]);
+  delete MEMO_.rows[name];
+}
+
+function appendRows_(name, rows) {
+  const sh = sheet_(name);
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setNumberFormat('@')
+    .setValues(rows.map(r => r.map(v => (v === null || v === undefined ? '' : String(v)))));
   delete MEMO_.rows[name];
 }
 
