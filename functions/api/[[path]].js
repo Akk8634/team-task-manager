@@ -20,7 +20,10 @@ const STATUSES = ['Pending', 'In progress', 'Done', 'N/A'];
 /** Pending and In progress are both still open (not done). */
 function isOpen_(status) { return status === 'Pending' || status === 'In progress'; }
 const SLOTS = ['morning', 'afternoon', 'evening', 'night'];
-const DEFAULT_SETTINGS = { MORNING_TIME: '08:00', AFTERNOON_TIME: '14:00', EVENING_TIME: '20:00', NIGHT_TIME: '23:00', ADMIN_SUMMARY: 'Yes' };
+const DEFAULT_SETTINGS = {
+  MORNING_TIME: '08:00', AFTERNOON_TIME: '14:00', EVENING_TIME: '20:00', NIGHT_TIME: '23:00', ADMIN_SUMMARY: 'Yes',
+  WORKING_DAYS: 'Mon, Tue, Wed, Thu, Fri', // days off get no daily tasks and no reminders
+};
 const END_OF_DAY = '23:59';
 const MAX_LINES = 30;
 const TIME_ZONE = 'Asia/Kolkata';
@@ -122,6 +125,7 @@ function makeApp(env, origin) {
   const OCC = new Map();         // occurrence cache: 'taskId|day' → due date
   const TASK_DAY = new Map();    // 'taskId|day' → the parts of an item that are the same for every member
   let SETTINGS_CACHE = null;
+  let WORK_DAYS = null;
   const TODAY = todayStr_();
   const NOW = nowStr_();
   let sendBudget = SEND_BUDGET;
@@ -203,6 +207,8 @@ function makeApp(env, origin) {
   function setSetting_(k, v) {
     SETTINGS[k] = String(v);
     SETTINGS_CACHE = null;
+    WORK_DAYS = null;
+    OCC.clear();
     TASK_DAY.clear();
     run_('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', k, String(v));
   }
@@ -267,6 +273,13 @@ function makeApp(env, origin) {
     SETTINGS_CACHE = s;
     return s;
   }
+  /** ISO weekdays (1 = Mon … 7 = Sun) the team works. */
+  function workDays_() {
+    if (!WORK_DAYS) WORK_DAYS = parseWorkDays_(settings_().WORKING_DAYS);
+    return WORK_DAYS;
+  }
+  function isWorkDay_(day) { return workDays_().has(isoDay_(day)); }
+
   function slotTimes_() {
     const s = settings_();
     return { morning: s.MORNING_TIME, afternoon: s.AFTERNOON_TIME, evening: s.EVENING_TIME, night: s.NIGHT_TIME };
@@ -276,6 +289,7 @@ function makeApp(env, origin) {
     return {
       morningTime: s.MORNING_TIME, afternoonTime: s.AFTERNOON_TIME, eveningTime: s.EVENING_TIME, nightTime: s.NIGHT_TIME,
       adminSummary: s.ADMIN_SUMMARY !== 'No',
+      workingDays: WEEKDAYS.filter((d, i) => workDays_().has(i + 1)),
     };
   }
   function miniAppLink_() { return origin + '/'; }
@@ -380,7 +394,13 @@ function makeApp(env, origin) {
   function apiMyDay_(ctx) {
     const today = todayStr_();
     const items = sortItems_(memberItems_(ctx.member, today, TASKS, LOGS));
-    return { today, now: nowStr_(), items, settings: publicSettings_(), week: weekRange_(today), month: monthRange_(today) };
+    const w = weekRange_(today);
+    const mo = monthRange_(today);
+    return {
+      today, now: nowStr_(), items, settings: publicSettings_(),
+      week: { start: w.start, end: lastWorkDay_(w.start, w.end, workDays_()) },
+      month: { start: mo.start, end: lastWorkDay_(mo.start, mo.end, workDays_()) },
+    };
   }
 
   function apiUpcoming_(ctx) {
@@ -610,6 +630,11 @@ function makeApp(env, origin) {
     setSetting_('EVENING_TIME', times[2]);
     setSetting_('NIGHT_TIME', times[3]);
     setSetting_('ADMIN_SUMMARY', args.adminSummary ? 'Yes' : 'No');
+    if (Array.isArray(args.workingDays)) {
+      const days = WEEKDAYS.filter(d => args.workingDays.includes(d));
+      if (!days.length) throw new Error('Please select at least one working day.');
+      setSetting_('WORKING_DAYS', days.join(', '));
+    }
     return apiGetSettings_();
   }
 
@@ -869,7 +894,7 @@ function makeApp(env, origin) {
     Array.from(new Set([last.slice(0, 10), nowStr.slice(0, 10)])).forEach(day => {
       SLOTS.forEach(slot => {
         const x = day + ' ' + times[slot];
-        if (x > last && x <= nowStr) events.push({ day, type: slot });
+        if (x > last && x <= nowStr && isWorkDay_(day)) events.push({ day, type: slot });
       });
     });
     const sent = events.length ? await dispatch_(events) : 0;
@@ -893,10 +918,10 @@ function makeApp(env, origin) {
     events.forEach(ev => {
       days.add(ev.day);
       if (ev.type === 'morning') {
-        const y = addDays_(ev.day, -1);
+        const y = prevWorkDay_(ev.day, workDays_());
         days.add(y);
-        if (isoDay_(ev.day) === 1) daysBetweenList_(weekRange_(y).start, y).forEach(d => days.add(d));
-        if (Number(ev.day.slice(8)) === 1) daysBetweenList_(monthRange_(y).start, y).forEach(d => days.add(d));
+        if (y < weekRange_(ev.day).start) daysBetweenList_(weekRange_(y).start, weekRange_(y).end).forEach(d => days.add(d));
+        if (y.slice(0, 7) !== ev.day.slice(0, 7)) daysBetweenList_(monthRange_(y).start, monthRange_(y).end).forEach(d => days.add(d));
       }
     });
     days.add(todayStr_());
@@ -949,9 +974,15 @@ function makeApp(env, origin) {
     const monthPending = month.filter(i => isOpen_(i.status));
     const wd = isoDay_(day);
     const dom = Number(day.slice(8));
-    const monthEnd = Number(monthRange_(day).end.slice(8));
-    const isLastWeekDay = wd === 7;
-    const isLastMonthDay = dom === monthEnd;
+    const work = workDays_();
+    const wk = weekRange_(day);
+    const mo = monthRange_(day);
+    const weekDue = lastWorkDay_(wk.start, wk.end, work);
+    const monthDue = lastWorkDay_(mo.start, mo.end, work);
+    const isFirstWeekDay = day === firstWorkDay_(wk.start, wk.end, work);
+    const isFirstMonthDay = day === firstWorkDay_(mo.start, mo.end, work);
+    const isLastWeekDay = day === weekDue;
+    const isLastMonthDay = day === monthDue;
     const lines = [];
     const buttons = [];
     const addButtons = list => list.forEach(i => {
@@ -967,16 +998,17 @@ function makeApp(env, origin) {
       section(`🔴 <b>Late (${carried.length})</b>: still open from earlier`, carried, { due: true });
       section(`☀️ <b>Morning tasks (${morning.length})</b>: complete by ${fmt12_(s.AFTERNOON_TIME)}`, morning);
       section(`🌇 <b>Evening &amp; general tasks (${later.length})</b>: complete by end of day`, later);
-      if (wd === 1 && week.length) section(`📆 <b>This week (${week.length})</b>: complete by Sunday`, weekPending.length ? weekPending : [], {});
-      else if (wd === 4 && weekPending.length) section(`📆 <b>Mid-week check</b>: ${weekPending.length} of ${week.length} weekly tasks pending, ${7 - wd} days left`, weekPending);
-      else if (isLastWeekDay && weekPending.length) section(`⚠️ <b>Last day of the week</b>: ${weekPending.length} weekly task${weekPending.length === 1 ? '' : 's'} will be Missed after tonight`, weekPending);
-      const left = monthEnd - dom;
-      if (dom === 1 && month.length) section(`🗓️ <b>This month (${month.length})</b>: complete by ${prettyDate_(monthRange_(day).end)}`, monthPending);
-      else if (dom === 15 && monthPending.length) section(`🗓️ <b>Mid-month check</b>: ${monthPending.length} of ${month.length} monthly tasks pending, ${left} days left`, monthPending);
-      else if (left <= 2 && monthPending.length) {
+      const weekLeft = workDaysBetween_(day, weekDue, work);
+      if (isFirstWeekDay && week.length) section(`📆 <b>This week (${week.length})</b>: complete by ${prettyDate_(weekDue)}`, weekPending.length ? weekPending : [], {});
+      else if (isLastWeekDay && weekPending.length) section(`⚠️ <b>Last working day of the week</b>: ${weekPending.length} weekly task${weekPending.length === 1 ? '' : 's'} due today`, weekPending);
+      else if (wd === 4 && weekPending.length) section(`📆 <b>Mid-week check</b>: ${weekPending.length} of ${week.length} weekly tasks pending, ${weekLeft} working day${weekLeft === 1 ? '' : 's'} left after today`, weekPending);
+      const left = workDaysBetween_(day, monthDue, work);
+      if (isFirstMonthDay && month.length) section(`🗓️ <b>This month (${month.length})</b>: complete by ${prettyDate_(monthDue)}`, monthPending);
+      else if (dom === 15 && monthPending.length) section(`🗓️ <b>Mid-month check</b>: ${monthPending.length} of ${month.length} monthly tasks pending, ${left} working days left after today`, monthPending);
+      else if (day <= monthDue && left <= 2 && monthPending.length) {
         section(left === 0
-          ? `⚠️ <b>Last day of the month</b>: ${monthPending.length} monthly task${monthPending.length === 1 ? '' : 's'} will be Missed after tonight`
-          : `⚠️ <b>Month ends in ${left} day${left === 1 ? '' : 's'}</b>: ${monthPending.length} monthly task${monthPending.length === 1 ? '' : 's'} pending`, monthPending);
+          ? `⚠️ <b>Last working day of the month</b>: ${monthPending.length} monthly task${monthPending.length === 1 ? '' : 's'} due today`
+          : `⚠️ <b>Month ends in ${left} working day${left === 1 ? '' : 's'}</b>: ${monthPending.length} monthly task${monthPending.length === 1 ? '' : 's'} pending`, monthPending);
       }
       if (lines.length === 1) return null;
       addButtons(carried);
@@ -995,20 +1027,23 @@ function makeApp(env, origin) {
       if (!openList.length && !extraWeek.length && !extraMonth.length) return null;
       const total = openList.length + extraWeek.length + extraMonth.length;
       lines.push(isNight
-        ? `🌙 <b>Final reminder, ${first}</b>: ${total} task${total === 1 ? '' : 's'} will be marked <b>Missed</b> at midnight.`
+        ? `🌙 <b>Final reminder, ${first}</b>: ${total} task${total === 1 ? '' : 's'} still open. After midnight they count as <b>late or missed</b>.`
         : `🌆 <b>Evening reminder, ${first}</b>: ${total} task${total === 1 ? '' : 's'} still pending today.`);
       section(`🔴 <b>Late (${carried.length + morning.length})</b>`, carried.concat(morning), { due: true });
       section(`⏳ <b>Pending (${later.length})</b>`, later);
-      section(`📆 <b>Weekly: last day (${extraWeek.length})</b>`, extraWeek);
-      section(`🗓️ <b>Monthly: last day (${extraMonth.length})</b>`, extraMonth);
+      section(`📆 <b>Weekly: due today (${extraWeek.length})</b>`, extraWeek);
+      section(`🗓️ <b>Monthly: due today (${extraMonth.length})</b>`, extraMonth);
       addButtons(openList.concat(extraWeek, extraMonth));
     }
     return { text: lines.join('\n'), buttons };
   }
 
-  /** Morning report for admins: yesterday's results, plus last week's (Mondays) and last month's (1st). */
+  /**
+   * Morning report for admins: the previous working day's results, plus last week's weekly tasks
+   * (first working day of the week) and last month's monthly tasks (first working day of the month).
+   */
   function adminReport_(team, tasks, logMap, day) {
-    const yesterday = addDays_(day, -1);
+    const yesterday = prevWorkDay_(day, workDays_());
     const lines = [];
     const rows = dayReport_(team, yesterday);
     if (rows.length) {
@@ -1023,8 +1058,8 @@ function makeApp(env, origin) {
       lines.push('', `📅 <b>${label}</b>, ${prettyDate_(range.start)} – ${prettyDate_(range.end)}`);
       rs.forEach(r => lines.push(`${esc_(r.name)}: ✅ ${r.onTime} · 🟠 ${r.late} · ❌ ${r.missed}  of ${r.total}`));
     };
-    if (isoDay_(day) === 1) period('Weekly tasks, last week', weekRange_(yesterday), 'Weekly');
-    if (Number(day.slice(8)) === 1) period('Monthly tasks, last month', monthRange_(yesterday), 'Monthly');
+    if (yesterday < weekRange_(day).start) period('Weekly tasks, last week', weekRange_(yesterday), 'Weekly');
+    if (yesterday.slice(0, 7) !== day.slice(0, 7)) period('Monthly tasks, last month', monthRange_(yesterday), 'Monthly');
     return lines.length ? lines.join('\n') : null;
   }
 
@@ -1165,7 +1200,7 @@ function makeApp(env, origin) {
   function occurrenceFor_(task, dayStr) {
     const ck = task.id + '|' + dayStr;
     if (OCC.has(ck)) return OCC.get(ck);
-    const v = occurrenceUncached_(task, dayStr);
+    const v = occurrenceUncached_(task, dayStr, workDays_());
     OCC.set(ck, v);
     return v;
   }
@@ -1178,7 +1213,7 @@ function makeApp(env, origin) {
     const due = occurrenceFor_(t, dayStr);
     let v = null;
     if (due) {
-      const deadline = deadlineFor_(t, due, settings_());
+      const deadline = deadlineFor_(t, due, settings_(), workDays_());
       const flexible = isFlexible_(t);
       v = {
         due, deadline, flexible,
@@ -1389,12 +1424,13 @@ function makeApp(env, origin) {
 
 // ───────────────────────── Pure helpers ─────────────────────────
 
-function occurrenceUncached_(task, dayStr) {
+function occurrenceUncached_(task, dayStr, wd) {
   if (!task.active) return null;
   const day = parseDate_(dayStr);
   let due;
   switch (task.category) {
     case 'Daily':
+      if (!wd.has(isoDay_(dayStr))) return null; // no daily tasks on days off
       due = dayStr;
       break;
     case 'Weekly': {
@@ -1421,7 +1457,7 @@ function occurrenceUncached_(task, dayStr) {
       return null;
   }
   // Periods that ended before the task was created don't count
-  if (task.createdDate && periodEnd_(task, due) < task.createdDate) return null;
+  if (task.createdDate && periodEnd_(task, due, wd) < task.createdDate) return null;
   return due;
 }
 
@@ -1431,18 +1467,44 @@ function isFlexible_(t) {
   return null;
 }
 
-/** Last calendar day of an occurrence's completion window. */
-function periodEnd_(task, due) {
+/** Last day of an occurrence's completion window: for "any time" tasks, the last working day of the week/month. */
+function periodEnd_(task, due, wd) {
   const f = isFlexible_(task);
-  if (f === 'week') return addDays_(due, 6);
-  if (f === 'month') return monthRange_(due).end;
+  if (f === 'week') return lastWorkDay_(due, addDays_(due, 6), wd);
+  if (f === 'month') return lastWorkDay_(due, monthRange_(due).end, wd);
   return due;
 }
 
 /** 'yyyy-MM-dd HH:mm' by which the occurrence should be done to count as on time. */
-function deadlineFor_(task, due, s) {
-  if (isFlexible_(task)) return periodEnd_(task, due) + ' ' + END_OF_DAY;
+function deadlineFor_(task, due, s, wd) {
+  if (isFlexible_(task)) return periodEnd_(task, due, wd) + ' ' + END_OF_DAY;
   return due + ' ' + (task.shift === 'Morning' ? s.AFTERNOON_TIME : END_OF_DAY);
+}
+
+function parseWorkDays_(v) {
+  const set = new Set(String(v || '').split(',').map(x => WEEKDAYS.indexOf(x.trim().slice(0, 3)) + 1).filter(n => n > 0));
+  return set.size ? set : new Set([1, 2, 3, 4, 5, 6, 7]);
+}
+/** Last working day between start and end (inclusive); end itself if none. */
+function lastWorkDay_(start, end, wd) {
+  for (let d = end; d >= start; d = addDays_(d, -1)) if (wd.has(isoDay_(d))) return d;
+  return end;
+}
+function firstWorkDay_(start, end, wd) {
+  for (let d = start; d <= end; d = addDays_(d, 1)) if (wd.has(isoDay_(d))) return d;
+  return start;
+}
+/** The working day before `day` (within the last 7 days). */
+function prevWorkDay_(day, wd) {
+  let d = addDays_(day, -1);
+  for (let i = 0; i < 7; i++, d = addDays_(d, -1)) if (wd.has(isoDay_(d))) return d;
+  return addDays_(day, -1);
+}
+/** Working days after `from` up to and including `to`. */
+function workDaysBetween_(from, to, wd) {
+  let n = 0;
+  for (let d = addDays_(from, 1); d <= to; d = addDays_(d, 1)) if (wd.has(isoDay_(d))) n++;
+  return n;
 }
 
 function monthlyDue_(y, m, date) {

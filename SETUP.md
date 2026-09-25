@@ -90,7 +90,7 @@ In the Mini App, go to **Manage → Tasks → ＋ New task**:
 | Field | Options |
 |---|---|
 | Category | **Daily**, **Weekly**, **Monthly** or **One-time** |
-| Weekly: when? | **Any day** (complete any time Mon–Sun, by Sunday night) or **Fixed days** (e.g. every Wednesday) |
+| Weekly: when? | **Any day** (complete any time in the week, by the last working day) or **Fixed days** (e.g. every Wednesday) |
 | Monthly: when? | **Any time** (complete any time in the month, by the last day) or **Fixed date** (e.g. the 5th) |
 | Shift | **Morning** (due by the afternoon time, 2 PM) · **Evening** / **General** (due by end of day) |
 | Time | Optional label shown on the task, e.g. a meeting at 11:30 AM. No separate reminder. |
@@ -109,8 +109,8 @@ Test the reminders from **Manage → Settings → Send now**. The same section h
 |---|---|---|
 | Daily, Morning shift | **2:00 PM** the same day | **Late** until midnight, then **Missed** |
 | Daily, Evening / General | **End of day** (midnight) | **Missed** |
-| Weekly, any day | **Sunday night** (week = Mon–Sun) | **Missed** |
-| Monthly, any time | **Last day of the month** | **Missed** |
+| Weekly, any day | **Last working day of the week** (Friday for Mon–Fri) | **Late** over the weekend, **Missed** from Monday |
+| Monthly, any time | **Last working day of the month** | **Late** until the month ends, then **Missed** |
 | Weekly/Monthly fixed day, One-time | That day (2 PM for Morning shift, midnight otherwise) | **Late** until the next occurrence, then **Missed**. One-time tasks stay Late until done. |
 
 **Marked done by mistake?** Tap **UNDO** in the message at the bottom of the app, tap the task's circle again, or open the task and tap **↩️ Undo: mark as not done**. In the bot, the ✅ button turns into **↩️ Undo** after you press it. A task can be undone until its period closes.
@@ -126,17 +126,19 @@ Each member gets **at most 4 messages a day**, and only when something is pendin
 | **8:00 AM** ☀️ | Day plan: Late items, Morning tasks (due by 2 PM), Evening & general tasks, plus weekly/monthly checkpoints |
 | **2:00 PM** 🌤️ | Afternoon check: Morning tasks not done are now **Late**, plus Evening & general tasks |
 | **8:00 PM** 🌆 | Evening reminder: everything still pending today |
-| **11:00 PM** 🌙 | Final reminder: these tasks will be **Missed** at midnight |
+| **11:00 PM** 🌙 | Final reminder: after midnight these tasks count as late or missed |
 
 Weekly and monthly checkpoints are added to the 8 AM message:
 
 | When | Weekly ("any day" tasks) | Monthly ("any time" tasks) |
 |---|---|---|
-| Start | Monday: this week's list | 1st: this month's list |
+| Start | First working day of the week: this week's list | First working day of the month: this month's list |
 | Middle | Thursday: mid-week check | 15th: mid-month check |
-| End | Sunday: last-day warning (also at 8 PM and 11 PM) | Last 3 days: countdown (last day also at 8 PM and 11 PM) |
+| End | Last working day: "due today" (also at 8 PM and 11 PM) | Last 3 working days: countdown (last day also at 8 PM and 11 PM) |
 
-**Admin reports** come with the 8 AM message: yesterday's on-time / late / missed per member, last week's weekly tasks on Mondays, and last month's monthly tasks on the 1st.
+**Admin reports** come with the 8 AM message: the previous working day's on-time / late / missed per member (on Monday, Friday's report), last week's weekly tasks on the first working day of the week, and last month's monthly tasks on the first working day of the month.
+
+**Working days** (default Mon–Fri) are set in **Manage → Settings**. Days off get no daily tasks, no reminders and no Missed. Tasks with a fixed day or date keep that day even if it is a day off.
 
 Change the 4 reminder times in **Manage → Settings**. They go out within 5 minutes of the set time.
 

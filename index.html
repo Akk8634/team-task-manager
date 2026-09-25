@@ -855,7 +855,7 @@ function renderToday() {
     ['Morning', 'by ' + fmt12(S.cfg.afternoonTime), i => i._group === 'Morning'],
     ['Evening', 'by end of day', i => i._group === 'Evening'],
     ['General', 'by end of day', i => i._group === 'General'],
-    ['This week', 'by Sun ' + fmtShort(S.week.end) + ' · ' + daysLeftTxt(S.week.end), i => i._group === 'week'],
+    ['This week', 'by ' + fmtShort(S.week.end) + ' · ' + daysLeftTxt(S.week.end), i => i._group === 'week'],
     ['This month', 'by ' + fmtShort(S.month.end) + ' · ' + daysLeftTxt(S.month.end), i => i._group === 'month'],
     ['If applicable', 'when it happens', i => i._group === 'optional'],
   ];
@@ -1127,7 +1127,8 @@ function settingsHtml() {
       ${timeRow('s_n', 'moon', 'c-indigo', 'Night reminder', s.nightTime)}
       <div class="row"><span class="ico c-green">${UI.bell}</span><div class="body"><div class="title">Daily report to admins</div></div><label class="switch"><input type="checkbox" id="s_sum" ${s.adminSummary ? 'checked' : ''}><span></span></label></div>
     </div>
-    <div class="section-foot">Morning-shift tasks are late after the afternoon check. Evening and general tasks are late after midnight. Weekly “any day” tasks are due by Sunday, monthly “any time” tasks by month end. Timezone: ${esc(s.timeZone)}.</div>
+    <div class="section-title">Working days</div><div class="section"><div class="row"><div class="daypick" id="s_wd" style="width:100%">${DAYS.map(d => `<button type="button" data-act="day" data-k="${d}" class="${(s.workingDays || DAYS.slice(0, 5)).includes(d) ? 'on' : ''}">${d}</button>`).join('')}</div></div></div>
+    <div class="section-foot">Days off get no daily tasks and no reminders. Morning-shift tasks are late after the afternoon check; evening and general tasks after midnight. Weekly “any day” and monthly “any time” tasks are due on the last working day of the week or month. Timezone: ${esc(s.timeZone)}.</div>
     <div class="section" style="margin-top:14px"><div class="row tap action" data-act="saveSettings"><div class="body" style="text-align:center"><div class="title">Save settings</div></div></div></div>
     <div class="section-title">Send now</div><div class="section">
       <div class="row tap" data-act="openBroadcast"><span class="ico c-pink">${UI.megaphone}</span><div class="body"><div class="title">Message to team</div></div><span class="chev">›</span></div>
@@ -1158,9 +1159,9 @@ function renderTaskEditor(id, preset) {
     </div>
     <div class="section-title">Schedule</div><div class="section">
       <div class="field"><label>Category</label><select id="f_cat">${CATS.map(c => `<option ${c === t.category ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
-      <div class="field" id="w_week"><label>When in the week?</label>${seg('weekMode', S.editWeek, [['any', 'Any day (by Sunday)'], ['fixed', 'Fixed days']])}
+      <div class="field" id="w_week"><label>When in the week?</label>${seg('weekMode', S.editWeek, [['any', 'Any day this week'], ['fixed', 'Fixed days']])}
         <div class="daypick ${S.editWeek === 'fixed' ? '' : 'hide'}" id="f_days" style="margin-top:8px">${DAYS.map(d => `<button type="button" data-act="day" data-k="${d}" class="${t.weeklyDays.includes(d) ? 'on' : ''}">${d}</button>`).join('')}</div></div>
-      <div class="field" id="w_month"><label>When in the month?</label>${seg('monthMode', S.editMonth, [['any', 'Any time (by month end)'], ['fixed', 'Fixed date']])}
+      <div class="field" id="w_month"><label>When in the month?</label>${seg('monthMode', S.editMonth, [['any', 'Any time this month'], ['fixed', 'Fixed date']])}
         <input id="f_mdate" type="number" min="1" max="31" inputmode="numeric" placeholder="Date (1–31)" value="${esc(t.monthlyDate || 1)}" class="${S.editMonth === 'fixed' ? '' : 'hide'}" style="margin-top:10px"></div>
       <div class="field" id="w_date"><label>Due date</label><input id="f_date" type="date" value="${esc(t.dueDate || S.today)}"></div>
       <div class="field" id="w_shift"><label>Shift</label><select id="f_shift">${SHIFTS.map(s => `<option value="${s}" ${s === t.shift ? 'selected' : ''}>${s === 'Morning' ? 'Morning (due by afternoon)' : s === 'Evening' ? 'Evening (due by end of day)' : 'General (due by end of day)'}</option>`).join('')}</select></div>
@@ -1559,7 +1560,7 @@ const ACTIONS = {
   async saveSettings(el) {
     el.disabled = true;
     try {
-      S.settings = await api('saveSettings', { morningTime: $('#s_m').value, afternoonTime: $('#s_a').value, eveningTime: $('#s_e').value, nightTime: $('#s_n').value, adminSummary: $('#s_sum').checked });
+      S.settings = await api('saveSettings', { morningTime: $('#s_m').value, afternoonTime: $('#s_a').value, eveningTime: $('#s_e').value, nightTime: $('#s_n').value, adminSummary: $('#s_sum').checked, workingDays: [...document.querySelectorAll('#s_wd button.on')].map(b => b.dataset.k) });
       S.cfg = { morningTime: S.settings.morningTime, afternoonTime: S.settings.afternoonTime, eveningTime: S.settings.eveningTime, nightTime: S.settings.nightTime };
       haptic('success'); toast('Settings saved'); renderManage();
     } catch (e) { el.disabled = false; fail(e); }
