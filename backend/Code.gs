@@ -650,7 +650,24 @@ function onMessage_(msg) {
     sendTelegram_(chatId, dayListMessage_(member, cmd === '/pending'), openAppKeyboard_());
     return;
   }
-  sendTelegram_(chatId, `Hi <b>${esc_(firstName_(member.name))}</b>! Tap <b>Open Tasks</b> to manage your tasks.\n\n/today: today's tasks\n/pending: pending tasks only`, openAppKeyboard_());
+  sendTelegram_(chatId, greetingMessage_(member), openAppKeyboard_());
+}
+
+/** Friendly time-of-day greeting with a one-line snapshot of the member's day. */
+function greetingMessage_(member) {
+  const h = Number(nowHM_().slice(0, 2));
+  const hello = h < 5 ? '🌙 Hello' : h < 12 ? '☀️ Good morning' : h < 17 ? '🌤️ Good afternoon' : '🌆 Good evening';
+  const lines = [`${hello}, <b>${esc_(firstName_(member.name))}</b>!`];
+  if (member.getsTasks) {
+    const today = todayStr_();
+    const c = countItems_(memberItems_(member, today, getTasks_(), getLogMap_()), today);
+    if (!c.total) lines.push('Nothing is due today. Have a great day!');
+    else if (!c.pending) lines.push(`All <b>${c.total}</b> tasks for today are done. Great work! 🎉`);
+    else lines.push(`You have <b>${c.pending}</b> of ${c.total} tasks left today${c.late ? `, <b>${c.late}</b> late` : ''}.`);
+  } else {
+    lines.push('Your team dashboard is ready.');
+  }
+  return lines.join('\n');
 }
 
 function onCallback_(cq) {
