@@ -11,8 +11,8 @@ A task manager that runs entirely inside Telegram.
 
 | File | What it is |
 |---|---|
-| `index.html` | The Mini App screen, hosted on Netlify |
-| `netlify.toml` | Netlify settings (no build step) |
+| `index.html` | The Mini App screen, hosted on Cloudflare Pages |
+| `_headers` | Cloudflare Pages cache settings |
 | `backend/Code.gs` | The backend: API, bot and scheduled reminders |
 | `backend/appsscript.json` | Apps Script project settings (IST timezone, web app access) |
 
@@ -24,15 +24,18 @@ A task manager that runs entirely inside Telegram.
 2. Give it a name (e.g. *Cityflo Tasks*), then a username that ends in `bot` (e.g. `cityflo_tasks_bot`).
 3. Copy the **token** BotFather gives you (e.g. `123456789:ABC...`). Keep it private.
 
-## Step 2: Host the Mini App on Netlify (5 min)
+## Step 2: Host the Mini App on Cloudflare Pages (5 min)
 
-The Mini App (`index.html`) must be available at a public HTTPS address. Netlify hosts it for free and redeploys automatically on every push to GitHub.
+The Mini App (`index.html`) must be available at a public HTTPS address. Cloudflare Pages hosts it for free (unlimited traffic, 500 deploys a month) and redeploys automatically on every push to GitHub.
 
-1. Go to **https://app.netlify.com/signup** and choose **Sign up with GitHub** (use the `Akk8634` account).
-2. Click **Add new site → Import an existing project → GitHub**, and allow Netlify to access the **`team-task-manager`** repository.
-3. Leave all settings as they are (`netlify.toml` in the repo already sets them) and click **Deploy**.
-4. When it finishes, Netlify shows your site URL, e.g. `https://team-task-manager-abc123.netlify.app`.
-   - Optional: **Site configuration → Change site name** gives a nicer URL, e.g. `https://cityflo-tasks.netlify.app`.
+1. Go to **https://dash.cloudflare.com/sign-up** and create a free account.
+2. Open **Workers & Pages → Create → Pages → Connect to Git**, sign in with GitHub (the `Akk8634` account) and pick the **`team-task-manager`** repository.
+3. On the build settings screen:
+   - **Framework preset:** None
+   - **Build command:** leave empty
+   - **Build output directory:** `/`
+4. Click **Save and Deploy**. When it finishes, Cloudflare shows your site URL, e.g. `https://team-task-manager.pages.dev`.
+   - The `_headers` file in the repo makes Telegram always load the latest version of the app.
 5. Open the URL in a browser. You should see **"Open in Telegram"**, which means it works. The app itself only runs inside Telegram.
 
 Use this URL as `MINI_APP_URL` in Step 5.
@@ -66,7 +69,7 @@ Use this URL as `MINI_APP_URL` in Step 5.
    const CONFIG = {
      BOT_TOKEN: '123456789:ABC...',                                // Step 1
      WEB_APP_URL: 'https://script.google.com/macros/s/.../exec',   // Step 4
-     MINI_APP_URL: 'https://<your-site>.netlify.app/',             // Step 2
+     MINI_APP_URL: 'https://<your-site>.pages.dev/',             // Step 2
    };
    ```
 2. 💾 Save, select the **`setup`** function in the dropdown at the top, and click **Run**.
@@ -161,7 +164,7 @@ The bot token and other settings are kept in Apps Script's Script Properties, no
 ## Updating the code later
 
 - **Backend (`Code.gs`):** after editing, go to **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**. The URL stays the same. Run `setup` again if you changed CONFIG.
-- **Mini App (`index.html`):** push the new file to GitHub. Netlify redeploys within a minute.
+- **Mini App (`index.html`):** push the new file to GitHub. Cloudflare Pages redeploys within a minute or two.
 
 ## Troubleshooting
 

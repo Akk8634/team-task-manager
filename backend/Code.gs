@@ -8,7 +8,7 @@
 const CONFIG = {
   BOT_TOKEN: '',     // From @BotFather, e.g. 123456789:ABC...
   WEB_APP_URL: '',   // This script's web app deployment URL (ends with /exec)
-  MINI_APP_URL: '',  // Netlify URL of the Mini App, e.g. https://cityflo-tasks.netlify.app/
+  MINI_APP_URL: '',  // Cloudflare Pages URL of the Mini App, e.g. https://team-task-manager.pages.dev/
 };
 
 const SHEET_TASKS = 'Tasks';
