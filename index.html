@@ -118,6 +118,17 @@
   .section-title .count { margin-left: auto; text-transform: none; color: var(--hint); font-variant-numeric: tabular-nums; }
   .section { background: var(--card); border-radius: 12px; margin: 0 12px; overflow: hidden; }
   .section-foot { color: var(--hint); font-size: 13px; padding: 7px 28px 0; line-height: 1.4; }
+  .dayoff { padding: 30px 20px 26px; text-align: center; }
+  .dayoff .em { width: 72px; height: 72px; margin: 0 auto 14px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 36px; background: var(--brand-soft); }
+  .dayoff h2 { margin: 0; font-size: 21px; font-weight: 700; letter-spacing: -.01em; color: var(--text); }
+  .dayoff p { margin: 6px auto 0; max-width: 290px; color: var(--hint); font-size: 15px; line-height: 1.4; }
+  .dayoff .pill { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; padding: 7px 14px; border-radius: 999px;
+    background: var(--soft); color: var(--text); font-size: 14px; font-weight: 500; }
+  .dayoff.compact { display: flex; align-items: center; gap: 12px; padding: 12px 14px; text-align: left; }
+  .dayoff.compact .em { width: 40px; height: 40px; margin: 0; font-size: 20px; flex: none; }
+  .dayoff.compact h2 { font-size: 16px; }
+  .dayoff.compact p { margin: 2px 0 0; font-size: 14px; max-width: none; }
   .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; position: relative; min-height: 46px; background: var(--card); }
   .row + .row::before, .swipe + .swipe .row::before { content: ''; position: absolute; top: 0; left: 14px; right: 0; height: .5px; background: var(--sep); }
   .row.indent + .row.indent::before, .swipe + .swipe .row.indent::before { left: 50px; }
@@ -421,6 +432,32 @@ function confirmBox(msg) {
 }
 function pd(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
 function fmtFull(s) { const d = pd(s); return WEEK[d.getDay()] + ', ' + d.getDate() + ' ' + MONTHS[d.getMonth()]; }
+// Working days (Mon–Fri unless the admin changed them in Settings)
+function workDays() { return (S.cfg && S.cfg.workingDays) || (S.settings && S.settings.workingDays) || DAYS.slice(0, 5); }
+function isDayOff(s) { return !workDays().includes(DAYS[(pd(s).getDay() + 6) % 7]); }
+function nextWorkDay(s) {
+  const d = pd(s);
+  for (let i = 1; i <= 7; i++) {
+    d.setDate(d.getDate() + 1);
+    const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    if (!isDayOff(k)) return k;
+  }
+  return '';
+}
+/** "It's Saturday" card for days off. compact = one-line version for the dashboard. */
+function dayOffCard(s, compact, hasOpen) {
+  const day = WEEK[pd(s).getDay()];
+  const next = nextWorkDay(s);
+  const isToday = s === S.today;
+  const title = isToday ? `It's ${day}` : `${day} was a day off`;
+  const text = compact
+    ? 'Day off: no daily tasks or reminders.'
+    : hasOpen
+      ? 'Day off. No daily tasks or reminders today. The weekly and monthly tasks below can wait for a working day.'
+      : 'Day off. No tasks or reminders today. Enjoy your day off!';
+  if (compact) return `<div class="section" style="margin-top:14px"><div class="dayoff compact"><div class="em">🌴</div><div><h2>${esc(title)}</h2><p>${text}</p></div></div></div>`;
+  return `<div class="section" style="margin-top:14px"><div class="dayoff"><div class="em">🌴</div><h2>${esc(title)}</h2><p>${text}</p>${isToday && next ? `<div class="pill">Back on ${esc(fmtFull(next))}</div>` : ''}</div></div>`;
+}
 function fmtShort(s) { const d = pd(s); return d.getDate() + ' ' + MONTHS[d.getMonth()]; }
 function fmt12(hm) { if (!hm) return ''; const [h, m] = hm.split(':').map(Number); return (h % 12 || 12) + ':' + String(m).padStart(2, '0') + ' ' + (h < 12 ? 'AM' : 'PM'); }
 function timeOf(dt) { return dt && dt.length > 10 ? fmt12(dt.slice(11, 16)) : ''; }
@@ -845,8 +882,10 @@ function renderToday() {
   let html = `<div class="largetitle"><div class="t"><h1>Today</h1><div class="sub">${bits.join(' · ')}</div></div>
     ${due.length ? `<div class="summary num">${ring(done, due.length)}${done}/${due.length}</div>` : ''}</div>`;
   setCompact(`Today${due.length ? ` <span class="c num">${done}/${due.length}</span>` : ''}`);
+  const off = isDayOff(S.today);
+  if (off) html += dayOffCard(S.today, false, items.some(i => isOpen(i) && !i.optional));
   if (!items.length) {
-    app.innerHTML = html + `<div class="section" style="margin-top:14px"><div class="empty">${S.boot.user.getsTasks ? 'No tasks right now.' : 'No tasks are assigned to you.'}</div></div>`;
+    app.innerHTML = html + (off ? '' : `<div class="section" style="margin-top:14px"><div class="empty">${S.boot.user.getsTasks ? 'No tasks right now.' : 'No tasks are assigned to you.'}</div></div>`);
     return;
   }
   const groups = [
@@ -1029,11 +1068,13 @@ function renderDashboard() {
     <div class="stats"><div class="stat"><b class="num" style="color:var(--ok)">${sum('done') - sum('doneLate')}</b><span>On time</span></div>
     <div class="stat"><b class="num" style="color:var(--warn)">${sum('late') + sum('doneLate')}</b><span>Late</span></div>
     <div class="stat"><b class="num" style="color:var(--danger)">${d.isPast ? sum('missed') : sum('pending')}</b><span>${d.isPast ? 'Missed' : 'Open'}</span></div></div>`;
-  if (!m.length) html += '<div class="section" style="margin-top:14px"><div class="empty">No members have tasks yet.</div></div>';
+  if (isDayOff(d.day)) html += dayOffCard(d.day, true);
+  if (!m.length) html += isDayOff(d.day) ? '' : '<div class="section" style="margin-top:14px"><div class="empty">No members have tasks yet.</div></div>';
   else html += '<div class="section-title">Members<span class="count">' + m.length + '</span></div><div class="section">' + m.map(x => {
     const open = S.open[x.id];
     const meta = [];
     if (x.pending) meta.push(`<span style="color:var(--danger)">${x.pending} ${d.isPast ? 'not done' : 'open'}</span>`);
+    else if (!x.total && isDayOff(d.day)) meta.push('<span>Day off</span>');
     else meta.push('<span style="color:var(--ok)">All done</span>');
     if (x.inProgress) meta.push(`<span class="tag blue">${x.inProgress} in progress</span>`);
     if (x.late) meta.push(`<span class="tag red">${x.late} late</span>`);
@@ -1561,7 +1602,8 @@ const ACTIONS = {
     el.disabled = true;
     try {
       S.settings = await api('saveSettings', { morningTime: $('#s_m').value, afternoonTime: $('#s_a').value, eveningTime: $('#s_e').value, nightTime: $('#s_n').value, adminSummary: $('#s_sum').checked, workingDays: [...document.querySelectorAll('#s_wd button.on')].map(b => b.dataset.k) });
-      S.cfg = { morningTime: S.settings.morningTime, afternoonTime: S.settings.afternoonTime, eveningTime: S.settings.eveningTime, nightTime: S.settings.nightTime };
+      S.cfg = { morningTime: S.settings.morningTime, afternoonTime: S.settings.afternoonTime, eveningTime: S.settings.eveningTime, nightTime: S.settings.nightTime, workingDays: S.settings.workingDays };
+      S.dash = null; // the Team screen reloads with the new working days
       haptic('success'); toast('Settings saved'); renderManage();
     } catch (e) { el.disabled = false; fail(e); }
   },
