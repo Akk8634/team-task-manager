@@ -299,7 +299,7 @@
 
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
-const API_URL = new URLSearchParams(location.search).get('api') || '';
+const API_URL = '/api/app'; // same site (Cloudflare Pages Functions)
 const CATS = ['Daily', 'Weekly', 'Monthly', 'One-time'];
 const SHIFTS = ['Morning', 'Evening', 'General'];
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -354,7 +354,7 @@ const hasNativeBack = !!(tg && tg.BackButton && tg.isVersionAtLeast && tg.isVers
 
 // ───────── Helpers ─────────
 /**
- * Calls the Apps Script backend. Gives up after `timeoutMs` so nothing can hang forever.
+ * Calls the backend. Gives up after `timeoutMs` so nothing can hang forever.
  * Errors the server reports on purpose (validation, access) are marked `fatal` so callers don't retry them.
  */
 async function api(action, args, timeoutMs) {
@@ -546,8 +546,7 @@ async function boot() {
     try { tg.onEvent('themeChanged', applyColorScheme); } catch (e) { /* older client */ }
   }
   if (!tg || !tg.initData) return screen('📱', 'Open in Telegram', 'Please open this app from the Team Task Manager bot in Telegram.');
-  if (!API_URL) return screen('⚠️', 'App link incomplete', 'Please open the app using the "Open Tasks" button in the bot.');
-  // Show the last saved copy at once (Apps Script needs a few seconds to wake up), then refresh it
+  // Show the last saved copy at once, then refresh it
   const cached = readBootCache();
   if (cached) { handleBoot(cached); setSync(true); }
   try {
@@ -1048,7 +1047,7 @@ function renderDashboard() {
       <div class="body"><div class="title" style="font-size:15px">${esc(i.title)}</div><div class="meta">${i.category !== 'Daily' ? catTag(i.category) : ''}${i.optional ? '<span class="tag orange">If applicable</span>' : ''}${statusTags(i).join('')}${i.status === 'Done' && i.updatedAt ? `<span>Done ${timeOf(i.updatedAt)}</span>` : ''}${i.remarks ? `<span>${esc(i.remarks)}</span>` : ''}</div></div></div>`).join('');
     return row;
   }).join('') + '</div>';
-  if (d.minDay) html += '<div class="section-foot">Shows the last 60 days. Older history is in the TaskLog Archive sheet.</div>';
+  if (d.minDay) html += '<div class="section-foot">Shows the last 60 days. Full history is in the History sheet.</div>';
   app.innerHTML = html;
   $('#dashDay').onchange = e => { S.dashDay = e.target.value; loadDashboard(); };
 }

@@ -4,17 +4,18 @@ A task manager that runs entirely inside Telegram.
 
 - **Telegram Mini App:** an app-like screen inside Telegram for tasks, checklists, the team dashboard and admin settings
 - **Telegram bot:** 4 daily reminders (8 AM, 2 PM, 8 PM, 11 PM), weekly/monthly checkpoints and admin reports, with quick ✅ Done buttons
-- **Google Sheet:** stores all the data
-- **Google Apps Script:** the backend, which is free and needs no server
+- **Cloudflare (free plan):** hosts the Mini App, runs the backend (Pages Functions) and stores the data (D1 database)
+- **Google Sheet:** a read-only copy for reports and history, updated every 15 minutes. Its script also runs the reminder check every 5 minutes.
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `index.html` | The Mini App screen, hosted on Cloudflare Pages |
+| `index.html` | The Mini App screen |
+| `functions/api/[[path]].js` | The backend: Mini App API, bot webhook, reminders, Sheet copy |
 | `_headers` | Cloudflare Pages cache settings |
-| `backend/Code.gs` | The backend: API, bot and scheduled reminders |
-| `backend/appsscript.json` | Apps Script project settings (IST timezone, web app access) |
+| `backend/Code.gs` | The Google Sheet script: moves old data once, runs the reminder check, updates the Sheet copy |
+| `backend/appsscript.json` | Apps Script project settings (IST timezone) |
 
 ---
 
@@ -24,9 +25,7 @@ A task manager that runs entirely inside Telegram.
 2. Give it a name (e.g. *Cityflo Tasks*), then a username that ends in `bot` (e.g. `cityflo_tasks_bot`).
 3. Copy the **token** BotFather gives you (e.g. `123456789:ABC...`). Keep it private.
 
-## Step 2: Host the Mini App on Cloudflare Pages (5 min)
-
-The Mini App (`index.html`) must be available at a public HTTPS address. Cloudflare Pages hosts it for free (unlimited traffic, 500 deploys a month) and redeploys automatically on every push to GitHub.
+## Step 2: Host the app on Cloudflare Pages (5 min)
 
 1. Go to **https://dash.cloudflare.com/sign-up** and create a free account.
 2. Open **Workers & Pages → Create → Pages → Connect to Git**, sign in with GitHub (the `Akk8634` account) and pick the **`team-task-manager`** repository.
@@ -34,62 +33,57 @@ The Mini App (`index.html`) must be available at a public HTTPS address. Cloudfl
    - **Framework preset:** None
    - **Build command:** leave empty
    - **Build output directory:** `/`
-4. Click **Save and Deploy**. When it finishes, Cloudflare shows your site URL, e.g. `https://team-task-manager.pages.dev`.
-   - The `_headers` file in the repo makes Telegram always load the latest version of the app.
-5. Open the URL in a browser. You should see **"Open in Telegram"**, which means it works. The app itself only runs inside Telegram.
+4. Click **Save and Deploy**. Cloudflare shows your site URL, e.g. `https://cityflo-tasks.pages.dev`.
 
-Use this URL as `MINI_APP_URL` in Step 5.
+The `functions` folder becomes the backend automatically.
 
-> `index.html` contains no secrets. The backend address is passed to it at runtime by the bot.
+## Step 3: Create the database and the secret key (5 min)
 
-## Step 3: Create the Google Sheet and Apps Script project
+1. In Cloudflare, open **Storage & Databases → D1 SQL Database → Create**. Name it `cityflo-tasks` and click **Create**.
+2. Open **Workers & Pages → your Pages project → Settings → Bindings → Add → D1 database**:
+   - **Variable name:** `DB` (exactly this)
+   - **D1 database:** `cityflo-tasks`
+   - Save.
+3. In the same project, open **Settings → Variables and Secrets → Add**:
+   - **Type:** Secret
+   - **Variable name:** `SYNC_KEY`
+   - **Value:** a long random password (at least 20 letters and numbers). The Google Sheet script uses it to talk to the backend.
+   - Save.
+4. Open **Deployments**, and on the latest deployment choose **⋯ → Retry deployment**. Bindings and secrets take effect on the next deployment.
 
-1. Create a new Google Sheet, e.g. **"Team Task Manager"**.
-2. Open **Extensions → Apps Script**.
-3. Delete everything in the default `Code.gs` and paste in the contents of **`backend/Code.gs`**.
-4. Open ⚙️ **Project Settings** and tick **"Show appsscript.json manifest file in editor"**. Then open `appsscript.json` in the Editor and replace its contents with **`backend/appsscript.json`**.
-5. 💾 Save.
+The tables are created automatically in Step 4.
 
-## Step 4: Deploy the backend as a web app
+## Step 4: Connect the Google Sheet (5 min)
 
-1. Click **Deploy → New deployment**, and choose type **Web app** from the ⚙️ icon.
-2. Use these settings:
-   - **Execute as:** Me
-   - **Who has access:** Anyone
-3. Click **Deploy**, authorize when asked, and copy the **Web app URL**. It ends with `/exec`.
-
-> **"Anyone" is required**, because Telegram and the Mini App call this URL without a Google login. Every request is still verified: Mini App requests must carry Telegram's signed user data, and bot updates must carry a secret key.
->
-> If you don't see **"Anyone"**, your Google Workspace admin has blocked public web apps. Ask them to allow it, or create the Sheet with a personal Gmail account instead.
-
-## Step 5: Fill in CONFIG and run `setup`
-
-1. At the top of `Code.gs`, fill in:
+1. Create a Google Sheet, e.g. **"Team Task Manager"**, and open **Extensions → Apps Script**.
+2. Replace everything in `Code.gs` with **`backend/Code.gs`**, and fill in CONFIG:
    ```js
    const CONFIG = {
-     BOT_TOKEN: '123456789:ABC...',                                // Step 1
-     WEB_APP_URL: 'https://script.google.com/macros/s/.../exec',   // Step 4
-     MINI_APP_URL: 'https://<your-site>.pages.dev/',             // Step 2
+     APP_URL: 'https://cityflo-tasks.pages.dev', // Step 2
+     SYNC_KEY: '...',                            // Step 3
+     BOT_TOKEN: '123456789:ABC...',              // Step 1
    };
    ```
-2. 💾 Save, select the **`setup`** function in the dropdown at the top, and click **Run**.
-3. Open **Execution log**. It shows a **6-digit admin code**.
+3. 💾 Save, select **`setup`** in the dropdown at the top, click **Run** and allow access when asked.
+4. Open **Execution log**. It shows a **6-digit admin code** (only when there is no admin yet).
 
-`setup` creates the `Tasks`, `TaskLog` and `Team` sheets, connects the bot, adds the **Open Tasks** menu button and schedules the reminder trigger (checks every 5 minutes).
+> **Moving from the old Apps Script version?** Use the same Sheet and the same Apps Script project. The first `setup` copies Tasks, Team, TaskLog and TaskLog Archive (and the reminder times and bot token) into the database, then renames the old log tabs to *Old TaskLog* and *Old TaskLog Archive*. It never copies twice, so the live data is never overwritten. The old web app deployment is no longer used and can be archived.
 
-## Step 6: Become the admin
+`setup` connects the bot to Cloudflare, adds the **Open Tasks** menu button, schedules the check every 5 minutes and creates the Sheet copy.
+
+## Step 5: Become the admin
 
 1. Open your bot in Telegram and tap **Start**.
 2. Tap the **Open Tasks** button (bottom-left of the chat).
 3. Enter the 6-digit admin code. You are now the Admin.
 
-## Step 7: Add your team
+## Step 6: Add your team
 
 1. Share the bot link (`https://t.me/<bot_username>`) with your team.
 2. Each person opens the bot, taps **Start** and then **Open Tasks**. This sends a join request.
 3. You get a Telegram message with **✅ Approve / ❌ Reject** buttons. You can also approve people in **Manage → People**.
 
-## Step 8: Create tasks
+## Step 7: Create tasks
 
 In the Mini App, go to **Manage → Tasks → ＋ New task**:
 
@@ -152,27 +146,44 @@ Change the 4 reminder times in **Manage → Settings**. They go out within 5 min
 - `/pending`: only pending tasks
 - `/app`: open the Mini App
 
-## Data in the Google Sheet
+## Data and reports in the Google Sheet
 
-- **`Tasks`:** all task settings
-- **`TaskLog`:** one row per member, per task, per period: status (Done / N/A / Pending), ticked checklist items, remarks and completion time. This is your history and report for the **last 60 days**.
-- **`TaskLog Archive`:** created automatically. Every night after 3 AM, TaskLog rows older than 60 days move here (same columns, nothing is deleted), so the app stays fast as history grows. Rows of one-time tasks stay in TaskLog. Use this tab (filters or **File → Download**) for older months and last year's data. The app's Team tab shows the last 60 days.
-- **`Team`:** Telegram ID, name, role (Admin / Member) and status (Active / Pending / Rejected)
+The app keeps its data in the Cloudflare database. The Sheet is a **copy** that updates every 15 minutes (or right away from the menu **Task Manager → Update this Sheet now**). Changes typed into these tabs are overwritten; manage tasks and people in the app.
 
-The bot token and other settings are kept in Apps Script's Script Properties, not in the Sheet.
+| Tab | What it shows |
+|---|---|
+| **Tasks** | All task settings |
+| **Team** | Telegram ID, name, role (Admin / Member), status and "Gets tasks" |
+| **History** | Every status change: one row per member, per task, per period, with status, ticked checklist items, remarks and time. Kept forever. |
+| **Daily Report** | One row per member per day: tasks due, done on time, done late, not done, on-time %. Added after each day ends. |
+| **Weekly & Monthly Report** | "Any day" weekly tasks per week and "any time" monthly tasks per month, per member |
+| **Monthly Summary** | Totals per member per month (daily + weekly + monthly), newest month first |
+
+Use filters on these tabs, or **File → Download** for Excel/CSV. The app's Team tab shows the last 60 days.
 
 ## Updating the code later
 
-- **Backend (`Code.gs`):** after editing, go to **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**. The URL stays the same. Run `setup` again if you changed CONFIG.
-- **Mini App (`index.html`):** push the new file to GitHub. Cloudflare Pages redeploys within a minute or two.
+- **App and backend (`index.html`, `functions/`):** push to GitHub. Cloudflare Pages redeploys within a minute or two.
+- **Google Sheet script (`Code.gs`):** paste the new version and save. No deployment is needed.
+
+## Free plan limits
+
+| | Free limit | This team (25 people, 50 tasks) |
+|---|---|---|
+| Requests | 100,000 a day | a few thousand a day |
+| Database | 5 GB, 5 million row reads a day | a few MB, well under the read limit |
+| Deploys | 500 a month | a few a week |
+| Messages per reminder | about 40 at once; the rest go with the next check (≤ 5 min later) | 25 |
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| Mini App says "Could not connect" | Check that `WEB_APP_URL` ends with `/exec` and the deployment has access **Anyone**. Then run `setup` again. |
-| Mini App says "Open in Telegram" | Open it with the bot's **Open Tasks** button, not a browser link. |
+| App says "The app is being upgraded" | `setup` has not finished yet. Run it again and check the log. |
+| App says "Open in Telegram" | Open it with the bot's **Open Tasks** button, not a browser link. |
+| `setup` says "Wrong or missing SYNC_KEY" | The key in CONFIG must match the Cloudflare secret, and the deployment must have been redeployed after adding it (Step 3.4). |
+| "The database is not connected yet" | Add the D1 binding named `DB` (Step 3.2) and redeploy. |
 | Bot buttons or commands don't respond | Run `setup` again. It re-registers the webhook. |
 | No reminders arriving | In Apps Script, open ⏰ **Triggers** and check that `tick` runs every 5 minutes. Running `setup` again recreates it. |
-| Lost the admin code | Run `setup` again. A new code is generated while there is no admin. |
+| Lost the admin code | Run `setup` again. A new code is shown while there is no admin. |
 | A member can't see a task | Check the task is Active and assigned to them, and that the member has **Gets tasks** turned on (for "All members" tasks). |
