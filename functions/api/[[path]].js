@@ -1044,35 +1044,59 @@ function makeApp(env, origin) {
    */
   function adminReport_(team, tasks, logMap, day) {
     const yesterday = prevWorkDay_(day, workDays_());
-    const lines = [];
+    const blocks = [];
     const rows = dayReport_(team, yesterday);
-    if (rows.length) {
-      lines.push(`📊 <b>Daily report</b>, ${prettyDate_(yesterday)}`, '✅ on time · 🟠 late · ❌ not done', '');
-      rows.slice().sort((a, b) => b.missed - a.missed || b.late - a.late).forEach(r => {
-        lines.push(`${esc_(r.name)}: ✅ ${r.onTime} · 🟠 ${r.late} · ❌ ${r.missed}  (${pct_(r.onTime, r.total)}% on time)`);
-      });
-    }
-    const period = (label, range, kind) => {
+    if (rows.length) blocks.push(reportBlock_(`📊 <b>Daily report</b> · ${prettyDate_(yesterday)}`, rows));
+    const period = (title, range, kind) => {
       const rs = periodReport_(team, range, kind);
-      if (!rs.length) return;
-      lines.push('', `📅 <b>${label}</b>, ${prettyDate_(range.start)} – ${prettyDate_(range.end)}`);
-      rs.forEach(r => lines.push(`${esc_(r.name)}: ✅ ${r.onTime} · 🟠 ${r.late} · ❌ ${r.missed}  of ${r.total}`));
+      if (rs.length) blocks.push(reportBlock_(`${title} · ${rangeText_(range)}`, rs));
     };
-    if (yesterday < weekRange_(day).start) period('Weekly tasks, last week', weekRange_(yesterday), 'Weekly');
-    if (yesterday.slice(0, 7) !== day.slice(0, 7)) period('Monthly tasks, last month', monthRange_(yesterday), 'Monthly');
-    return lines.length ? lines.join('\n') : null;
+    if (yesterday < weekRange_(day).start) period('📆 <b>Last week</b>: weekly tasks', weekRange_(yesterday), 'Weekly');
+    if (yesterday.slice(0, 7) !== day.slice(0, 7)) period('🗓️ <b>Last month</b>: monthly tasks', monthRange_(yesterday), 'Monthly');
+    return blocks.length ? blocks.join('\n\n━━━━━━━━━━\n\n') : null;
+  }
+
+  /**
+   * One report section: team total first, then the people who need attention (worst first),
+   * then everyone who was fully on time. Member lists sit in quote blocks; long lists are collapsible.
+   */
+  function reportBlock_(title, rows) {
+    const t = rows.reduce((x, r) => ({ total: x.total + r.total, onTime: x.onTime + r.onTime, late: x.late + r.late, missed: x.missed + r.missed }),
+      { total: 0, onTime: 0, late: 0, missed: 0 });
+    const lines = [
+      title,
+      '',
+      `${scoreDot_(t.onTime, t.total)} <b>${pct_(t.onTime, t.total)}% on time</b> (${t.onTime} of ${t.total} tasks)`,
+      `✅ ${t.onTime} on time  ·  🟠 ${t.late} late  ·  ❌ ${t.missed} not done`,
+    ];
+    const byName = (x, y) => cmp_(x.name.toLowerCase(), y.name.toLowerCase());
+    const attention = rows.filter(r => r.late || r.missed)
+      .sort((x, y) => x.onTime / x.total - y.onTime / y.total || y.missed - x.missed || byName(x, y));
+    const perfect = rows.filter(r => !r.late && !r.missed).sort(byName);
+    const quote = (list, collapsible) => `<blockquote${collapsible ? ' expandable' : ''}>${list.join('\n')}</blockquote>`;
+    if (attention.length) {
+      lines.push('', `<b>Needs attention (${attention.length})</b>`, quote(attention.map(r => {
+        const extra = [r.late ? `🟠 ${r.late} late` : '', r.missed ? `❌ ${r.missed} not done` : ''].filter(Boolean).join(' · ');
+        return `${scoreDot_(r.onTime, r.total)} <b>${esc_(r.name)}</b>  ${r.onTime}/${r.total} · ${pct_(r.onTime, r.total)}%\n      ${extra}`;
+      }), attention.length > 8));
+    }
+    if (perfect.length) {
+      lines.push('', `<b>All on time (${perfect.length})</b>`,
+        quote(perfect.map(r => `🟢 ${esc_(r.name)}  ${r.onTime}/${r.total}`), perfect.length > 6));
+    }
+    return lines.join('\n');
   }
 
   /** Per member: tasks that were due on `day` (daily, fixed-day weekly/monthly, one-time) and how they went. */
   function dayReport_(team, day) {
-    return team.map(m => {
+    return team.filter(m => joinedBy_(m, day)).map(m => {
       const items = memberItems_(m, day, TASKS, LOGS).filter(i => !i.optional && !i.flexible && i.dueDate === day);
       return Object.assign({ id: m.id, name: m.name }, classify_(items));
     }).filter(r => r.total);
   }
 
   function periodReport_(team, range, kind) {
-    return team.map(m => Object.assign({ id: m.id, name: m.name }, classify_(periodItems_(m, TASKS, LOGS, range, kind)))).filter(r => r.total);
+    return team.filter(m => joinedBy_(m, range.end)).map(m => Object.assign({ id: m.id, name: m.name }, classify_(periodItems_(m, TASKS, LOGS, range, kind)))).filter(r => r.total);
   }
 
   /** All occurrences of a member's Weekly/Monthly tasks whose deadline falls in the range. */
@@ -1545,6 +1569,25 @@ function countItems_(items) {
     monthTotal: month.length, monthDone: month.filter(i => i.status === 'Done').length,
     optionalDone: items.filter(i => i.optional && i.status === 'Done').length,
   };
+}
+
+/** Reports only count a member for days after they joined the team. */
+function joinedBy_(m, day) {
+  const d = String(m.joinedAt || '').slice(0, 10);
+  return !/^\d{4}-\d{2}-\d{2}$/.test(d) || d <= day;
+}
+/** 🟢 all on time · 🟡 80% or more · 🔴 below 80% */
+function scoreDot_(onTime, total) {
+  const p = total ? onTime / total : 1;
+  return p >= 1 ? '🟢' : p >= 0.8 ? '🟡' : '🔴';
+}
+/** "21–27 Sep" or "29 Sep – 5 Oct" */
+function rangeText_(r) {
+  const a = parseDate_(r.start);
+  const b = parseDate_(r.end);
+  return a.getUTCMonth() === b.getUTCMonth()
+    ? `${a.getUTCDate()}–${b.getUTCDate()} ${MONTHS[b.getUTCMonth()]}`
+    : `${a.getUTCDate()} ${MONTHS[a.getUTCMonth()]} – ${b.getUTCDate()} ${MONTHS[b.getUTCMonth()]}`;
 }
 
 function cmp_(a, b) { return a < b ? -1 : a > b ? 1 : 0; } // much faster than localeCompare
